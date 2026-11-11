@@ -104,6 +104,15 @@ The policy's tests cover every check, tampering, framing, a real payment from an
 identity through the registry, and a differential test of 14,048 seeded cases
 against the p256 crate's own verification, 2,048 of them through the packed module.
 
+## Publishing
+
+`.github/workflows/pages.yml` assembles the site on every push to main with
+`scripts/site.sh` (web/ at the top, the kit's modules at kit/web/) and checks it:
+every module parses, every import and asset is in the site, the page keeps its
+Content Security Policy, and the policy CodeHash the wallet trusts is
+`program.wasm`'s. Once GitHub Pages is turned on for the repository (Source:
+GitHub Actions), it publishes there, at `wallet.ting-project.com`.
+
 ## Safety
 
 The key never reaches the page; what the page asks it to sign is another matter. A

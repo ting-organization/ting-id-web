@@ -4,3 +4,5 @@ target/
 .devchain.json
 # The development chain's ids, written by scripts/dev.mjs.
 /web/dev-chain.json
+# The site as published, assembled by scripts/site.sh.
+/_site/
