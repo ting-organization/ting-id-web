@@ -1,0 +1,13 @@
+[package]
+name = "ting-program"
+version = "0.1.0"
+edition = "2024"
+description = "Writing a Ting program in Rust: the host functions, Ting's hash, and TCR-1 calls"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+default = ["runtime"]
+# The memory allocator and the panic handler a program needs. Turn it off to
+# bring your own.
+runtime = []

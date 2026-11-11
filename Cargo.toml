@@ -1,0 +1,6 @@
+[workspace]
+# `tests` is yours: the tests of your program. `kit/tools` is the kit's packer
+# and test chain. `program` builds for wasm32v1-none on its own: see build.sh.
+members = ["tests", "kit/tools"]
+exclude = ["program", "kit/program"]
+resolver = "3"

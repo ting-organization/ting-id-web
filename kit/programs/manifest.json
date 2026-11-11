@@ -1,0 +1,17 @@
+[
+  {
+    "name": "policy-p256",
+    "bytes": 63879,
+    "code_hash": "f065bf6d04a34ecbbeb94fb91571ccb2c08c6070cffd2ea4df948b46cda5ef06"
+  },
+  {
+    "name": "coin",
+    "bytes": 21460,
+    "code_hash": "c675a4b753b61b50ae4b63cde122171f8f2bfb9a05a92df895633ca8c351e4d6"
+  },
+  {
+    "name": "id-registry",
+    "bytes": 19849,
+    "code_hash": "edea54d81ee9c28319bb5f0aea7aacbe891654e358f6a5cbe7225078ba7396d3"
+  }
+]

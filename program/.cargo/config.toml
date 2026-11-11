@@ -1,0 +1,16 @@
+[build]
+target = "wasm32v1-none"
+
+[target.wasm32v1-none]
+rustflags = [
+  # Bulk copies and sign extension are in Ting's profile, and so is wide
+  # arithmetic (vm/profile), which turns P-256's 64-bit limb products into
+  # single instructions: a check costs 11.9 million C with it, 29.8 without.
+  # Rust calls wide-arithmetic unstable and warns about it on every build; the
+  # pinned toolchain keeps the output the same.
+  "-C", "target-feature=+bulk-memory,+sign-ext,+wide-arithmetic",
+  # One page to start, which each invocation pays for, and a 16 KiB stack inside it.
+  "-C", "link-arg=--initial-memory=65536",
+  "-C", "link-arg=--max-memory=16777216",
+  "-C", "link-arg=-zstack-size=16384",
+]

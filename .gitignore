@@ -1,0 +1,9 @@
+target/
+# The development chain's node and the scripts' keys and ids.
+/dev/
+.devchain.json
+# Built by build.sh from program/. Commit it once you deploy, so that others
+# can rebuild and compare its CodeHash.
+/program.wasm
+# The development chain's ids, written by scripts/dev.mjs.
+/web/dev-chain.json

@@ -1,0 +1,17 @@
+[package]
+name = "program-tests"
+version = "0.1.0"
+edition = "2024"
+description = "The tests of policy-webauthn, on Ting's reference VM"
+publish = false
+
+[[test]]
+name = "program"
+path = "program.rs"
+
+[dev-dependencies]
+ting-kit-tools = { path = "../kit/tools" }
+# A passkey in software: P-256 signing, SHA-256, and the browser's base64url.
+p256 = { version = "0.13.2", features = ["ecdsa"] }
+sha2 = "0.10"
+base64 = "0.22"

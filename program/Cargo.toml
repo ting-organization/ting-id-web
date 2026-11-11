@@ -1,0 +1,30 @@
+[package]
+name = "program"
+version = "0.1.0"
+edition = "2024"
+description = "policy-webauthn: a WebAuthn passkey as a key of a Ting account; built for wasm32v1-none, packed into program.wasm by build.sh"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+ting-program = { path = "../kit/program" }
+# RustCrypto's P-256: its field, scalar and point arithmetic and its key
+# decoding, with no signing, hashing or encoding features. src/verify.rs puts
+# them together as ECDSA's verification equation.
+p256 = { version = "=0.13.2", default-features = false, features = ["arithmetic"] }
+
+# A program pays about 60 C per byte of code the first time a transaction runs
+# it, and for every instruction. For P-256, opt-level 2 is cheapest overall:
+# measured per check, "z" makes 28 KB and 29.6 million C, "s" 32 KB and 14.2
+# million, 2 makes 60 KB and 11.9 million, 3 makes 66 KB and 12.1 million.
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+overflow-checks = false

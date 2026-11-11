@@ -1,0 +1,15 @@
+[package]
+name = "ting-kit-tools"
+version = "0.1.0"
+edition = "2024"
+description = "Packs a program into a module Ting accepts, and runs it on Ting's reference VM in tests"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# Ting's reference core: its VM, encodings and hash. Its consensus is frozen, so
+# a pinned commit stays right; a later one only brings the node's changes.
+ting-core = { git = "https://github.com/ting-organization/ting", rev = "0c1ab39732fff4cf74d3eb9464d7f8ff6db551cb" }
+wasmparser = "=0.240.0"
+wasm-encoder = { version = "=0.240.0", features = ["wasmparser"] }
+wat = "=1.240.0"

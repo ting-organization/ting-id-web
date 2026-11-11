@@ -1,0 +1,11 @@
+{
+  "name": "Ting ID",
+  "short_name": "Ting ID",
+  "description": "Your Ting identity and money, signed with your passkey.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f2f4f7",
+  "theme_color": "#0b1220",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
