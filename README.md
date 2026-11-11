@@ -16,6 +16,9 @@ Two pieces:
   deployed once per network. Its CodeHash is
   `91a7b9705abf0ee97947d45f7914cea689034c464e1da9186c0b06ddfb769fea`, built by
   `./build.sh`, which gives the same bytes on any machine with the pinned toolchain.
+  On the Ting network it is deployed at
+  `cfd585a5d39f59ae50a19a33e972c4daaa18fae0cf989ca00a999ca4bc94619c` (November 11,
+  2026); `program.wasm` is those bytes.
 - **`web/`, the wallet**: plain HTML, CSS and JavaScript, no build step and no
   third-party code. It holds no key: the passkey signs, and the chain holds the
   identity.
