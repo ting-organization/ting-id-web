@@ -22,6 +22,8 @@ export const session = {
   identity: null,
   coins: [],
   activity: [],
+  /** Recoveries of this identity guardians approve now (readRecoveries). */
+  recoveries: [],
   problem: null,
   policyReady: false,
   listeners: new Set(),
@@ -47,6 +49,7 @@ export const session = {
     this.identity = null;
     this.coins = [];
     this.activity = [];
+    this.recoveries = [];
     this.tipSeen = null;
     await this.open();
   },
@@ -80,6 +83,7 @@ export const session = {
     this.identity = null;
     this.coins = [];
     this.activity = [];
+    this.recoveries = [];
   },
 
   signer() {
@@ -113,9 +117,11 @@ export const session = {
     if (saved) {
       try {
         await this.readIdentity(saved);
+        await this.follow(saved);
         await this.readCoins(saved);
         this.settleRuns();
         await this.scan(saved);
+        await this.readRecoveries(saved);
         await this.watchPending();
       } catch (e) {
         this.problem = e.message;
@@ -145,6 +151,51 @@ export const session = {
     const mine = saved.publicKey && found.keys.find((k) =>
       this.net.policyWebauthn && hex(k.policy) === this.net.policyWebauthn && hex(k.params) === saved.publicKey);
     this.identity = { ...found, onChain: true, keyId: mine ? mine.keyId : null };
+  },
+
+  /** The key list of a recovery to this browser's passkey alone. */
+  recoveryKeys(saved = this.saved()) {
+    return registry.keyList([{ policy: unhex(this.net.policyWebauthn), params: unhex(saved.publicKey) }]);
+  },
+
+  /**
+   * What this browser waits for before it can act: a pending change adding
+   * its passkey, handed to the node to apply when due; or, while guardians
+   * recover the identity to its passkey, that recovery, read each block and
+   * handed to the node to run once approved and due.
+   */
+  async follow(saved) {
+    const id = this.identity;
+    this.recovery = null;
+    if (!saved.publicKey || !id?.onChain) return;
+    if (id.keyId != null) {
+      if (saved.recovering) this.keep({ ...saved, recovering: undefined });
+      return;
+    }
+    const change = id.pending.find((c) => c.ops.some((op) => op.kind === 'addKey' && hex(op.params) === saved.publicKey));
+    if (change) {
+      await this.hand(`${saved.id}:apply:${change.changeNo}`, registry.applyInput(id.id, change.changeNo),
+        Number(change.effectiveAt), 'Add this browser’s passkey');
+    }
+    if (saved.recovering) {
+      const keys = this.recoveryKeys(saved);
+      this.recovery = await registry.readRecovery(this.pool, this.registry, id.id, keys);
+      if (this.recovery?.dueAt != null) {
+        await this.hand(`${saved.id}:recover:${hex(this.recovery.proposal)}`, registry.recoverInput(id.id, keys),
+          Number(this.recovery.dueAt), 'Recovery to this browser’s passkey');
+      }
+    }
+  },
+
+  /** Hands an unsigned registry call to the node to hold until `at`, block time: once for each `tag`. */
+  async hand(tag, input, at, summary) {
+    if ((store.get().pending ?? []).some((p) => p.tag === tag)) return;
+    await this.call(this.registry, input, BUDGETS.execute, summary, { notBefore: at + 30, tag }).catch(() => {});
+  },
+
+  /** Recoveries of this identity that guardians approve now, as readRecoveries read them at the last block. */
+  openRecoveries() {
+    return this.recoveries;
   },
 
   async readCoins(saved) {
@@ -183,39 +234,106 @@ export const session = {
     return this.identity.slots.map((_, n) => hex(registry.slotAccount(this.registry, unhex(saved.id), n)));
   },
 
+  /** Where this identity's activity is kept in this browser. v3: each contract read to its own height, and the recovery proposals kept apart. */
+  scanKey(saved) {
+    return `${this.net.key}:${saved.id}:v3`;
+  },
+
   /**
    * Activity: the events of the followed coins and of the registry that touch
    * this identity, from its creation on, read forward as blocks come. Kept in
-   * this browser so that only new blocks are read each time.
+   * this browser so that only new blocks are read each time: each contract up
+   * to the height read so far, at most 20 pages of it a refresh, the rest on
+   * the next. The newest 300 items are kept for the list; every recovery
+   * proposal an approval named is kept apart, with the keys it installs, so
+   * that no number of other events can push one out (readRecoveries).
    */
   async scan(saved) {
-    const key = `${this.net.key}:${saved.id}`;
+    const key = this.scanKey(saved);
     const scans = store.get().scans ?? {};
-    const scan = scans[key] ?? { to: Math.max(0, (saved.createdHeight ?? 1) - 1), items: [] };
+    const scan = scans[key] ?? { start: Math.max(0, (saved.createdHeight ?? 1) - 1), at: {}, items: [], proposals: {} };
     const mine = new Set(this.accounts());
     const contracts = [...this.coins.map((c) => c.id), this.net.registry];
     const height = this.status.height;
-    if (scan.to < height) {
-      for (const contract of contracts) {
-        let from = scan.to + 1;
-        for (let pages = 0; pages < 20; pages++) {
-          const page = await this.pool.events(contract, from);
-          for (const block of page.items) {
-            for (const e of block.events) {
-              const item = describe(contract, unhex(e.payload_hex), mine, saved.id, this.net.registry);
-              if (item) scan.items.push({ ...item, contract, height: block.height, time: block.timestamp, tx: e.transaction });
-            }
-          }
-          if (!page.items.length || page.next > page.height || page.next > height) break;
-          from = page.next;
+    let changed = false;
+    for (const contract of contracts) {
+      let from = (scan.at[contract] ?? scan.start) + 1;
+      if (from > height) continue;
+      let reached = height;
+      for (let pages = 0; ; pages++) {
+        if (pages === 20) {
+          reached = from - 1;
+          break;
         }
+        const page = await this.pool.events(contract, from);
+        // Each block is read once, up to the height this refresh read the identity at: a node's page may run
+        // further, and what lies beyond waits for the next refresh. So no event shows twice, and no approval
+        // is checked against a recovery epoch older than its own.
+        let beyond = false;
+        for (const block of page.items) {
+          if (block.height > height) {
+            beyond = true;
+            break;
+          }
+          for (const e of block.events) {
+            const item = describe(contract, unhex(e.payload_hex), mine, saved.id, this.net.registry);
+            if (!item) continue;
+            scan.items.push({ ...item, contract, height: block.height, time: block.timestamp, tx: e.transaction });
+            if (item.kind === 'id:recovery-approved') scan.proposals[item.proposal] = item.keys;
+          }
+        }
+        if (beyond || page.next > height) break;
+        if (!page.items.length || page.next > page.height) {
+          // The page ran to the tip of the node that answered, which may be another node, behind this
+          // refresh's height: only what it covered is read, never less than before, and the next refresh
+          // reads on from there.
+          reached = Math.max(from - 1, Math.min(height, page.height));
+          break;
+        }
+        from = page.next;
       }
-      scan.to = height;
+      scan.at[contract] = reached;
+      changed = true;
+    }
+    if (changed) {
       scan.items.sort((a, b) => b.height - a.height);
       scan.items = scan.items.slice(0, 300);
-      store.set({ scans: { ...scans, [key]: scan } });
+      // This identity's activity kept under an earlier format is read no more: dropped, so it does not pile up.
+      const prefix = `${this.net.key}:${saved.id}`;
+      const kept = Object.fromEntries(Object.entries(scans).filter(([k]) => k !== prefix && !k.startsWith(`${prefix}:`)));
+      store.set({ scans: { ...kept, [key]: scan } });
     }
     this.activity = scan.items;
+  },
+
+  /**
+   * The recoveries of this identity that guardians approve now: of every
+   * proposal an approval named, those of the current recovery epoch (a change
+   * of keys, guardians or delays voids the others for good, and they are
+   * dropped), with their approvals and when they reached the threshold read
+   * from the proposal records, with proofs.
+   */
+  async readRecoveries(saved) {
+    const id = this.identity;
+    const key = this.scanKey(saved);
+    const scans = store.get().scans ?? {};
+    const scan = scans[key];
+    if (!id?.onChain || !scan) {
+      this.recoveries = [];
+      return;
+    }
+    const live = Object.entries(scan.proposals ?? {})
+      .filter(([proposal, keys]) => hex(registry.proposalOf(id.id, id.core.recoveryEpoch, unhex(keys))) === proposal);
+    if (live.length !== Object.keys(scan.proposals ?? {}).length) {
+      store.set({ scans: { ...scans, [key]: { ...scan, proposals: Object.fromEntries(live) } } });
+    }
+    const records = await registry.readProposals(this.pool, this.registry, id.id, live.map(([proposal]) => unhex(proposal)));
+    const need = registry.required(id.core);
+    this.recoveries = live.map(([proposal, keys], i) => {
+      const { approvals, reachedAt } = records[i];
+      const due = reachedAt > 0n && approvals >= need ? reachedAt + id.core.recoveryDelay : null;
+      return { proposal, keys, approvals, required: need, reachedAt, dueAt: due };
+    }).filter((p) => p.approvals > 0n);
   },
 
   /** A held run whose scheduled action no longer exists (it ran, or was cancelled) has nothing left to do. */
@@ -245,6 +363,16 @@ export const session = {
     const item = { id, summary, at: Date.now(), network: this.net.key, hex: hex(tx), state: 'pending', ...extra };
     store.set({ pending: [...(store.get().pending ?? []), item] });
     return item;
+  },
+
+  /** Proposes `ops` as one change of this identity, signed by this browser's passkey. */
+  async propose(ops, summary) {
+    const signer = this.signer();
+    if (!signer) throw new Error('This browser can’t act for this identity yet');
+    const input = await registry.proposeInput({
+      chain: this.chain, registry: this.registry, id: this.identity.id, opNonce: this.identity.core.opNonce, signer, ops,
+    });
+    return this.call(this.registry, input, BUDGETS.execute, summary);
   },
 
   /** Sends a call to `target` with `input` and the budget its kind needs. */
@@ -314,6 +442,13 @@ function describe(contract, payload, mine, idHex, registryHex) {
       if (name === 'change-proposed') {
         item.effectiveAt = Number(r.u64());
         item.ops = registry.decodeChange(r).map(opText);
+      }
+      if (name === 'recovery-approved' || name === 'recovery-withdrawn') {
+        item.proposal = hex(r.id());
+        item.guardian = hex(r.id());
+        item.approvals = Number(r.u64());
+        item.reachedAt = Number(r.u64());
+        if (name === 'recovery-approved') item.keys = hex(r.take(r.data.length - r.at));
       }
       return item;
     }

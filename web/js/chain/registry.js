@@ -172,6 +172,116 @@ export const applyInput = (id, changeNo) => concat(Uint8Array.of(4), id, u64(cha
 /** Creates an identity: `01 ‖ creation`. */
 export const createInput = (creationBytes) => concat(Uint8Array.of(1), creationBytes);
 
+/** A creation input read back: its keys, guardians, threshold, delays and slots. Throws when it does not decode exactly. */
+export function decodeCreation(bytes) {
+  const r = new Reader(bytes);
+  if (r.u8() !== 1) throw new Error('an identity of an unknown version');
+  const keys = readKeys(r);
+  const guardians = [];
+  for (let n = r.u64(); n > 0n; n--) guardians.push(r.id());
+  const threshold = r.u64();
+  const changeDelay = r.u64();
+  const recoveryDelay = r.u64();
+  const slots = [];
+  for (let n = r.u64(); n > 0n; n--) slots.push(r.u64());
+  r.id(); // the salt
+  r.end();
+  if (!keys.length) throw new Error('an identity without keys');
+  return { keys, guardians, threshold, changeDelay, recoveryDelay, slots };
+}
+
+function readKeys(r) {
+  const keys = [];
+  for (let n = r.u64(); n > 0n; n--) {
+    const policy = r.id();
+    keys.push({ policy, params: r.bytes() });
+  }
+  return keys;
+}
+
+/** A key list, `u64 count ‖ count × (policy ‖ Bytes(params))`, read back exactly. */
+export function decodeKeyList(bytes) {
+  const r = new Reader(bytes);
+  const keys = readKeys(r);
+  r.end();
+  return keys;
+}
+
+// ---- Recovery (Ting wiki: programs/identity, Recovery) ----------------------
+
+/** `H("app/id-v1/recovery", id ‖ u64 recovery_epoch ‖ key_list)`: what guardians approve. */
+export const proposalOf = (id, recoveryEpoch, keyListBytes) => H('app/id-v1/recovery', id, u64(recoveryEpoch), keyListBytes);
+
+const proposalKey = (id, proposal) => recordKey(5, id, proposal);
+const approvalKey = (id, proposal, guardian) => recordKey(6, id, concat(proposal, guardian));
+const currentApprovalKey = (id, recoveryEpoch, guardian) => recordKey(7, id, concat(u64(recoveryEpoch), guardian));
+
+/** How many approvals a recovery of `core` needs: its threshold, or more than half of its guardians. */
+export const required = (core) => (core.threshold > 0n ? core.threshold : core.guardianCount / 2n + 1n);
+
+/**
+ * Where the recovery of `id` to `keyListBytes` stands, read with proofs:
+ * `{ core, proposal, approvals, reachedAt, required, dueAt }`, dueAt null
+ * until enough guardians approve; null when no identity has that ID.
+ */
+export async function readRecovery(pool, registry, id, keyListBytes) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const coreBytes = await pool.record(registry, coreKey(id));
+    if (!coreBytes) return null;
+    const core = decodeCore(coreBytes);
+    const proposal = proposalOf(id, core.recoveryEpoch, keyListBytes);
+    const [again, record] = await pool.storage([[registry, coreKey(id)], [registry, proposalKey(id, proposal)]]);
+    if (hex(again) !== hex(coreBytes)) continue; // it changed meanwhile: read again
+    const r = record ? new Reader(record) : null;
+    const approvals = r ? r.u64() : 0n;
+    const reachedAt = r ? r.u64() : 0n;
+    const need = required(core);
+    const reached = reachedAt > 0n && approvals >= need;
+    return { core, proposal, approvals, reachedAt, required: need, dueAt: reached ? reachedAt + core.recoveryDelay : null };
+  }
+  throw new Error('The identity kept changing while it was read: try again.');
+}
+
+/** `{ approvals, reachedAt }` of each of `proposals` of `id`, read together with proofs; zeros for one never approved. */
+export async function readProposals(pool, registry, id, proposals) {
+  if (!proposals.length) return [];
+  const values = await pool.storage(proposals.map((p) => [registry, proposalKey(id, p)]));
+  return values.map((v) => {
+    const r = v ? new Reader(v) : null;
+    return { approvals: r ? r.u64() : 0n, reachedAt: r ? r.u64() : 0n };
+  });
+}
+
+/**
+ * A guardian's standing on the recovery of `id`: whether `guardian` is
+ * linked, the proposal it approves in the current epoch (or null), and its
+ * mark on `proposal`: 1 approved, 2 withdrawn, 0 none.
+ */
+export async function readGuardianStanding(pool, registry, id, core, guardian, proposal) {
+  const [linked, current, mark] = await pool.storage([
+    [registry, guardianKey(id, guardian)],
+    [registry, currentApprovalKey(id, core.recoveryEpoch, guardian)],
+    [registry, approvalKey(id, proposal, guardian)],
+  ]);
+  return { linked: Boolean(linked), approving: current ?? null, mark: mark?.[0] ?? 0 };
+}
+
+/** A guardian's approval of the recovery of `id` to `keyListBytes`, signed by a key of the guardian. */
+export async function approveInput({ chain, registry, id, guardian, keyListBytes, recoveryEpoch, signer }) {
+  const proposal = proposalOf(id, recoveryEpoch, keyListBytes);
+  const witness = await signer.sign(message(chain, registry, id, signer.keyId, concat(Uint8Array.of(5), proposal, guardian)));
+  return concat(Uint8Array.of(5), id, guardian, keyListBytes, u64(signer.keyId), framed(witness));
+}
+
+/** A guardian withdrawing its approval of `proposal`. */
+export async function withdrawInput({ chain, registry, id, guardian, proposal, signer }) {
+  const witness = await signer.sign(message(chain, registry, id, signer.keyId, concat(Uint8Array.of(6), proposal, guardian)));
+  return concat(Uint8Array.of(6), id, proposal, guardian, u64(signer.keyId), framed(witness));
+}
+
+/** Runs an approved, due recovery: anyone may, unsigned. */
+export const recoverInput = (id, keyListBytes) => concat(Uint8Array.of(7), id, keyListBytes);
+
 /**
  * The identities whose current keys include `key` ({policy, params}), found
  * from the registry's *created* events and checked by proved reads.

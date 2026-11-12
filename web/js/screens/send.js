@@ -261,7 +261,7 @@ export const review = {
 };
 
 /** The next nonce for an account: after this browser’s own action still on its way, if any. */
-function nextNonce(coinId, account) {
+export function nextNonce(coinId, account) {
   const pending = session.pending().filter((p) => p.coin === coinId && p.account === hex(account.account)
     && ['pending', 'deferred'].includes(p.state) && Date.now() - p.at < 2 * 86_400_000);
   const noted = pending.map((p) => BigInt(p.nonce)).reduce((a, b) => (b > a ? b : a), -1n);

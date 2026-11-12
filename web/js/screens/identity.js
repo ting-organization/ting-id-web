@@ -6,55 +6,34 @@
 import { hex, unhex } from '../../../kit/web/bytes.js';
 import { qrSvg } from '../../../kit/web/qr.js';
 import { idOf } from '../../../kit/web/ting.js';
-import { sha256 } from '../../../kit/web/sha256.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as registry from '../chain/registry.js';
-import { guardianCode, guardianLink, heldLink, hold } from '../links.js';
+import { guardianCode, guardianLink, heldLink, hold, readLink } from '../links.js';
+import * as p256 from '../p256.js';
 import * as passkey from '../passkey.js';
-import { accountBox, notices } from '../parts.js';
+import * as phrase from '../phrase.js';
+import { accountBox, fingerprint, isPhraseKey, keyKind, netTag, notices } from '../parts.js';
 import { session, slotName } from '../session.js';
 import * as store from '../store.js';
-import { $, $$, ask, copy, duration, esc, grouped, icon, initials, openSheet, problem, short, toast, when } from '../ui.js';
-
-const KNOWN_POLICIES = () => ({
-  [session.net.policyWebauthn ?? '']: 'Passkey',
-  '9558a75642eb797de5ec1be056f01c62d99c492c8f7ec6efed460767588987c9': 'Phone key',
-  '19efef33a81067da9465c698f884dbe9049088d5fdb60770e1af3edf2294782a': 'Phone key',
-  '35d2b107de4b2a738a8190be18ccfd35d9bac45da094cfa4281a3a4b178852b3': 'P-256 key',
-  '34ddc75c0463fd2d1542127fbf0fe92ba41bd4fbfba4e473d3aa941e74ab3b5e': 'P-256 key',
-});
-
-/** A device's fingerprint, as Ting ID shows it: the first 8 bytes of SHA-256 of its key. */
-const fingerprint = (key) => grouped(hex(sha256(key).subarray(0, 8)));
+import { $, $$, ask, copy, duration, esc, icon, initials, openSheet, problem, short, toast, when } from '../ui.js';
+import { bindRecoveringCard, phraseSection, recoveringCard, recoveryWarnings } from './recovery.js';
 
 /** `ting:device?id=…&scheme=webauthn&key=…&net=…`: asks another device to add this browser’s passkey. */
 const deviceLink = (id, key) => `ting:device?id=${hex(id)}&scheme=webauthn&key=${hex(key)}&net=${netTag()}`;
 
-/** The network tag in links: the first 8 hex digits of the chain ID. */
-const netTag = () => session.net.chainId.slice(0, 8);
-
 /** What this browser calls the guardian `g` (hex): its contact's name, else its short ID. */
 const guardianName = (g) => store.contactOfIdentity(g)?.name ?? `Identity ${short(g)}`;
 
-async function propose(ops, summary) {
-  const signer = session.signer();
-  if (!signer) throw new Error('This browser can’t act for this identity yet');
-  const id = session.identity;
-  const input = await registry.proposeInput({
-    chain: session.chain, registry: session.registry, id: id.id, opNonce: id.core.opNonce, signer, ops,
-  });
-  return session.call(session.registry, input, BUDGETS.execute, summary);
-}
+const propose = (ops, summary) => session.propose(ops, summary);
 
 export const identity = {
   render() {
     const saved = session.saved();
     const id = session.identity;
     if (!saved || !id) return '<section class="screen plain"><h1 class="page">Identity</h1></section>';
-    const names = KNOWN_POLICIES();
     const mine = id.keyId;
     const devices = id.keys.map((k) => {
-      const kind = names[hex(k.policy)] ?? 'Key';
+      const kind = keyKind(k);
       const here = k.keyId === mine;
       return `<div class="row"><span class="avatar">${icon(here ? 'check' : 'key')}</span><span class="main">
         <b>${here ? 'This device' : `${kind} #${k.keyId}`}</b><span>${esc(kind)} · ${fingerprint(k.params)}</span></span>
@@ -89,6 +68,7 @@ export const identity = {
       </div>
       <div class="screen narrow">
         <div class="stack mt">${notices()}</div>
+        ${mine != null ? recoveryWarnings() : ''}
         ${id.onChain && mine == null ? notThisBrowser(saved) : ''}
         <h2 class="section">Devices</h2>
         <div class="card list">${devices || '<div class="row"><span class="main"><span>None yet</span></span></div>'}</div>
@@ -97,6 +77,7 @@ export const identity = {
         <h2 class="section">Guardians</h2>
         <div class="card list">${guardians || '<div class="row"><span class="main"><b>No guardians linked from here</b><span class="wrap">Guardians are people you trust. Enough of them together can give your identity new keys if you lose every device.</span></span></div>'}</div>
         ${mine != null ? `<a class="link" href="#/add-guardian" data-link-guardian>${icon('shield')} Link a guardian</a>` : ''}
+        ${mine != null ? phraseSection(id) : ''}
         <h2 class="section">Accounts</h2>
         <div class="card list">${id.slots.map((d, n) => `<div class="row"><span class="avatar">${icon(d ? 'lock' : 'wallet')}</span><span class="main"><b>${esc(slotName(n))}</b>
           <span>${d ? `withdrawals wait ${esc(duration(d))}` : 'instant'}</span></span></div>`).join('')}</div>
@@ -144,10 +125,23 @@ export const identity = {
       return null;
     }));
     $('[data-copy-device]', view)?.addEventListener('click', () => copy($('[data-device-link]', view).textContent, 'Link copied'));
+    bindRecoveringCard(view);
   },
 };
 
+/**
+ * For a browser that can't act yet: its guardians' recover code while they
+ * recover the identity to it; when a change adding its passkey waits, when it
+ * applies; else how to make a passkey here and have another device add it.
+ */
 function notThisBrowser(saved) {
+  if (saved.recovering && saved.publicKey) return recoveringCard(saved);
+  const adding = saved.publicKey && session.identity.pending.find((c) => c.ops.some((op) => op.kind === 'addKey' && hex(op.params) === saved.publicKey));
+  if (adding) {
+    return `<div class="card pad mt stack"><b>This browser’s passkey is being added</b>
+      <p class="muted">Change #${adding.changeNo} adds it, and applies ${esc(when(Number(adding.effectiveAt)))}: the node holds it until then. Until it does, this browser shows ${esc(saved.name)} without acting for it.</p>
+      <p class="muted small">Any key of the identity can cancel the change meanwhile. If one does, and it was not you, a lost key may be in someone else’s hands: ask your guardians to recover you.</p></div>`;
+  }
   if (!saved.publicKey) {
     return `<div class="card pad mt stack"><b>This browser can’t act for ${esc(saved.name)} yet</b>
       <p class="muted">Make a passkey here, then add it from a device that can already act for this identity.</p>
@@ -164,7 +158,11 @@ function notThisBrowser(saved) {
 }
 
 function opWords(op) {
-  if (op.kind === 'addKey') return `Add a device (${fingerprint(op.params)})`;
+  // Only the phrase this browser made is called one: this list is where an owner spots a change they did not make.
+  if (op.kind === 'addKey' && isPhraseKey(op)) {
+    return `${hex(op.params) === session.saved()?.phraseKey ? 'Add your recovery phrase' : 'Add a phrase or phone key'} (${fingerprint(op.params)})`;
+  }
+  if (op.kind === 'addKey') return `Add a ${keyKind(op).toLowerCase()} (${fingerprint(op.params)})`;
   if (op.kind === 'removeKey') return `Remove device #${op.keyId}`;
   if (op.kind === 'addGuardian') return `Link guardian ${guardianName(hex(op.guardian))}`;
   if (op.kind === 'removeGuardian') return `Unlink guardian ${guardianName(hex(op.guardian))}`;
@@ -185,7 +183,7 @@ function showGuardianCode() {
     <p class="muted">Someone who wants you as a guardian scans this with Ting ID or Ting ID Web: Scan on the wallet, or Link a guardian on their Identity.</p>
     <div class="qr">${qr}</div>
     <p class="muted small center mt">If they ever lose their devices, your approval helps them get their identity back. It moves none of your coins.</p>
-    <div class="note">${icon('info')}<div>Ting ID Web cannot approve a recovery yet.</div></div>
+    <div class="note">${icon('info')}<div>To approve, scan the recover code they show you on the Scan screen.</div></div>
     <div class="sheet-actions"><button class="btn secondary" data-copy-code>${icon('copy')} Copy link</button>
       <button class="btn primary" data-done>Done</button></div></div>`);
   $('[data-copy-code]', dialog).addEventListener('click', () => copy(link, 'Link copied'));
@@ -201,24 +199,53 @@ const refused = (title, message) => changeScreen(title, `<div class="note bad mt
   <a class="btn secondary mt" href="#/scan">${icon('scan')} Scan a code</a>`);
 
 /**
+ * The kinds of key a device link may add, by its `scheme` (Ting ID's
+ * LINKS.md): the policy that checks the key on this network, the key in
+ * words, and whether a key is a point of its curve.
+ */
+const DEVICE_SCHEMES = () => ({
+  webauthn: { policy: session.net.policyWebauthn, kind: 'Passkey', valid: p256.onCurve },
+  secp256k1: { policy: session.net.policySecp256k1, kind: 'Phone key', valid: phrase.isPublicKey },
+  p256: { policy: session.net.policyP256, kind: 'P-256 key', valid: p256.onCurve },
+});
+
+/** What the held device link asks: `{ scheme, key }`, or the problems that refuse it. */
+function deviceAsked(link) {
+  const id = session.identity;
+  const problems = [];
+  let fields = {};
+  try {
+    fields = readLink(link).fields;
+  } catch (e) {
+    return { problems: [problem(e)] };
+  }
+  if (!id?.onChain || id.keyId == null) problems.push('This browser can’t act for an identity yet');
+  else if ((fields.id ?? '').toLowerCase() !== hex(id.id)) problems.push('The link is for another identity');
+  if ((fields.net ?? '').toLowerCase() !== netTag()) problems.push('The link is for another network');
+  const scheme = DEVICE_SCHEMES()[(fields.scheme ?? '').toLowerCase()];
+  const keyHex = (fields.key ?? '').toLowerCase();
+  const key = /^04[0-9a-f]{128}$/.test(keyHex) ? unhex(keyHex) : null;
+  if (!scheme) problems.push('The link names a kind of key Ting ID Web does not know');
+  else if (!scheme.policy) problems.push(`${scheme.kind}s do not work on this network`);
+  else if (!key || !scheme.valid(key)) problems.push('The link’s key is not a public key');
+  else if (id?.keys.some((k) => hex(k.params) === keyHex)) problems.push('That device can already act for this identity');
+  return { problems, scheme, key };
+}
+
+/**
  * Adding a device from its `ting:device` link, scanned or pasted on the Scan
- * screen: a change that waits the change delay.
+ * screen: a passkey of Ting ID Web in another browser, or a phone's key of
+ * Ting ID. A change that waits the change delay.
  */
 export const device = {
   render() {
     const link = heldLink('device');
     if (!link) return refused('Add a device', 'Scan the new device’s code on the Scan screen, or paste its link there.');
-    const f = Object.fromEntries(new URLSearchParams(link.slice(link.indexOf('?') + 1)));
-    const id = session.identity;
-    const problems = [];
-    if (!id?.onChain || id.keyId == null) problems.push('This browser can’t act for an identity yet');
-    else if (f.id !== hex(id.id)) problems.push('The link is for another identity');
-    if (f.net !== netTag()) problems.push('The link is for another network');
-    if (f.scheme !== 'webauthn' || !/^04[0-9a-f]{128}$/.test(f.key ?? '')) problems.push('Ting ID Web adds passkeys (scheme=webauthn) only');
-    else if (id?.keys.some((k) => hex(k.params) === f.key)) problems.push('That device can already act for this identity');
+    const { problems, scheme, key } = deviceAsked(link);
     if (problems.length) return refused('Add a device', `${problems.join('. ')}.`);
-    return changeScreen('Add a device', `<div class="card mt"><div class="kv"><span>Kind</span><span>Passkey</span></div>
-        <div class="kv"><span>Key</span><span class="mono">${fingerprint(unhex(f.key))}</span></div></div>
+    const id = session.identity;
+    return changeScreen('Add a device', `<div class="card mt"><div class="kv"><span>Kind</span><span>${esc(scheme.kind)}</span></div>
+        <div class="kv"><span>Key</span><span class="mono">${fingerprint(key)}</span></div></div>
       <div class="note warn">${icon('warn')}<div>Check that the new device shows the same key. Only add a device you hold yourself.</div></div>
       <div class="note">${icon('clock')}<div>Takes effect in ${esc(duration(id.core.changeDelay))}; until then any of your devices can cancel it.</div></div>
       <button class="btn primary mt" data-propose>${icon('key')} Propose</button>`);
@@ -227,11 +254,11 @@ export const device = {
     const link = heldLink('device');
     const button = $('[data-propose]', view);
     if (!link || !button) return;
-    const f = Object.fromEntries(new URLSearchParams(link.slice(link.indexOf('?') + 1)));
+    const { scheme, key } = deviceAsked(link);
     button.addEventListener('click', async () => {
       button.disabled = true;
       try {
-        const sent = await propose([{ kind: 'addKey', policy: unhex(session.net.policyWebauthn), params: unhex(f.key) }], 'Add a device');
+        const sent = await propose([{ kind: 'addKey', policy: unhex(scheme.policy), params: key }], `Add a device (${scheme.kind.toLowerCase()})`);
         hold(null);
         location.hash = `#/tx/${sent.id}`;
       } catch (err) {
@@ -419,10 +446,15 @@ export const restore = {
       <h1 class="page">Use an existing identity</h1>
       <div class="card list mt">
         <button class="row" data-with-passkey><span class="avatar">${icon('key')}</span><span class="main"><b>With a passkey</b>
-          <span class="wrap">A passkey you made for Ting ID Web, synced here or on a security key.</span></span>${icon('chevron')}</button>
-        <button class="row" data-with-id><span class="avatar">${icon('identity')}</span><span class="main"><b>With its identity ID</b>
-          <span class="wrap">Then a device that can act for it adds this one.</span></span>${icon('chevron')}</button>
+          <span class="wrap">One you made for Ting ID Web, synced here or on a security key. Works at once.</span></span>${icon('chevron')}</button>
+        <a class="row" href="#/restore-phrase"><span class="avatar">${icon('lock')}</span><span class="main"><b>With your recovery phrase</b>
+          <span class="wrap">The 12 words you wrote down. A passkey here can act once the change adding it applies, after 7 days.</span></span>${icon('chevron')}</a>
+        <button class="row" data-with-id><span class="avatar">${icon('identity')}</span><span class="main"><b>From another device</b>
+          <span class="wrap">Your phone with Ting ID, or another browser with Ting ID Web, adds this one. It can act after 7 days.</span></span>${icon('chevron')}</button>
+        <a class="row" href="#/restore-guardians"><span class="avatar">${icon('shield')}</span><span class="main"><b>With your guardians</b>
+          <span class="wrap">Lost everything? Enough of your guardians give this device a passkey. It can act 2 days after they approve.</span></span>${icon('chevron')}</a>
       </div>
+      <p class="muted small">7 and 2 days are the usual delays: an identity can set its own.</p>
       <div class="stack mt" data-out></div>
     </section>`;
   },
@@ -457,9 +489,10 @@ export const restore = {
     });
     $('[data-with-id]', view).addEventListener('click', async () => {
       const answer = await ask({
-        title: 'Your identity’s ID',
+        title: 'From another device',
+        text: 'Its ID is on the Identity tab of your other device. This browser then makes a passkey and shows a code for that device to scan.',
         fields: [{ name: 'id', label: 'Identity ID', placeholder: '64 hex digits', multiline: true }, { name: 'name', label: 'Name on this device', value: 'Me' }],
-        confirm: 'Add identity',
+        confirm: 'Continue',
       });
       if (!answer) return;
       const id = idOf(answer.id.replace(/\s+/g, ''));

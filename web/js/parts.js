@@ -1,9 +1,33 @@
 // Pieces several screens show: the coin mark, notices, an account box, the
-// activity list, the scheduled actions and what is waiting for a block.
+// activity list, the scheduled actions and what is waiting for a block; keys
+// in words.
 import { hex } from '../../kit/web/bytes.js';
+import { sha256 } from '../../kit/web/sha256.js';
 import { session, slotName } from './session.js';
 import * as store from './store.js';
 import { amount, day, esc, fractionHtml, grouped, icon, initials, short, shortAmount, when } from './ui.js';
+
+/** A key's fingerprint, as Ting ID shows it: the first 8 bytes of SHA-256 of its public key. */
+export const fingerprint = (params) => grouped(hex(sha256(params).subarray(0, 8)));
+
+/** The network tag in links: the first 8 hex digits of the chain ID. */
+export const netTag = () => session.net.chainId.slice(0, 8);
+
+/**
+ * What a key `{ policy, params }` is, in words. A secp256k1 key is a
+ * recovery phrase's: this browser's own when it added or restored with it,
+ * else a phrase of Ting ID, where a phone's key is its phrase's.
+ */
+export function keyKind(key) {
+  const policy = hex(key.policy);
+  if (policy === session.net.policyWebauthn) return 'Passkey';
+  if (policy === session.net.policySecp256k1) return hex(key.params) === session.saved()?.phraseKey ? 'Recovery phrase' : 'Phrase or phone key';
+  if (policy === session.net.policyP256) return 'P-256 key';
+  return 'Key';
+}
+
+/** Whether `key` is a recovery phrase's: a key of the secp256k1 policy. */
+export const isPhraseKey = (key) => Boolean(session.net.policySecp256k1) && hex(key.policy) === session.net.policySecp256k1;
 
 export function coinMark(coin, large = false) {
   const daler = coin?.symbol === 'DLR';
@@ -25,7 +49,15 @@ export function notices() {
   const id = session.identity;
   if (id && !id.onChain) out.push(`<div class="note">${icon('clock')}<div>Waiting for the next block to create this identity.</div></div>`);
   if (id?.onChain && id.keyId == null) {
-    out.push(`<div class="note warn">${icon('key')}<div>This browser can’t act for this identity yet. <a href="#/identity">Open Identity</a></div></div>`);
+    const saved = session.saved();
+    const adding = saved?.publicKey && id.pending.find((c) => c.ops.some((op) => op.kind === 'addKey' && hex(op.params) === saved.publicKey));
+    const text = saved?.recovering ? 'Your guardians are recovering this identity to this browser.'
+      : adding ? `This browser’s passkey can act from ${when(Number(adding.effectiveAt))}.`
+        : 'This browser can’t act for this identity yet.';
+    out.push(`<div class="note warn">${icon('key')}<div>${esc(text)} <a href="#/identity">Open Identity</a></div></div>`);
+  }
+  if (id?.keyId != null && session.openRecoveries().length) {
+    out.push(`<div class="note bad">${icon('warn')}<div>Guardians are approving a recovery of your identity. <a href="#/identity">See it on Identity</a></div></div>`);
   }
   return out.join('');
 }

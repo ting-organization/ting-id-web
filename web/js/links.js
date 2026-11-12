@@ -83,6 +83,74 @@ export function guardianLink(net, id, name) {
   return `ting:guardian?id=${id}${n ? `&name=${encodeURIComponent(n)}` : ''}&net=${net}`;
 }
 
+/** Bytes as base64url without padding (RFC 4648 §5), as links carry longer bytes. */
+export function base64url(bytes) {
+  let text = '';
+  for (const b of bytes) text += String.fromCharCode(b);
+  return btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** base64url back to bytes: unpadded, with no bits left over, or it throws. */
+export function fromBase64url(text) {
+  if (!/^[A-Za-z0-9_-]*$/.test(text) || text.length % 4 === 1) throw new Error('not base64url');
+  const padded = text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4);
+  const bytes = Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+  if (base64url(bytes) !== text) throw new Error('base64url with bits left over');
+  return bytes;
+}
+
+/** The fields of a `request` link for network `net`, or it throws, saying why. */
+function fieldsOf(text, request, net) {
+  const { request: made, fields } = readLink(text);
+  if (made !== request) throw new Error(`This is a ${made} link, not a ${request} link`);
+  if (!/^[0-9a-f]{8}$/i.test(fields.net ?? '')) throw new Error('The link has no network');
+  if (fields.net.toLowerCase() !== net) throw new Error('This link is for another Ting network');
+  return fields;
+}
+
+function longBytes(fields, name) {
+  try {
+    return fromBase64url(fields[name] ?? '');
+  } catch {
+    throw new Error(`The link’s ${name} is not written right`);
+  }
+}
+
+/** `ting:recover?id=…&keys=…&net=…`: a guardian who scans it in the wallet approves the recovery of `id` to `keys`. */
+export const recoverLink = (net, id, keyListBytes) => `ting:recover?id=${id}&keys=${base64url(keyListBytes)}&net=${net}`;
+
+/** A recover link's `{ id, keys }`: the identity in lowercase hex, the key list as bytes. */
+export function readRecoverLink(text, net) {
+  const fields = fieldsOf(text, 'recover', net);
+  if (!/^[0-9a-f]{64}$/i.test(fields.id ?? '')) throw new Error('The link’s identity ID is not 64 hex digits');
+  return { id: fields.id.toLowerCase(), keys: longBytes(fields, 'keys') };
+}
+
+/**
+ * `ting:create?input=…&name=…&net=…`: whoever opens it sends the identity
+ * whose creation input is `input` its first coins, and creates it first when
+ * no block has yet.
+ */
+export function createLink(net, input, name) {
+  const n = linkText(name);
+  return `ting:create?input=${base64url(input)}${n ? `&name=${encodeURIComponent(n)}` : ''}&net=${net}`;
+}
+
+/** A create link's `{ input, name, coin, amount }`: the creation input as bytes, the rest as given or null. */
+export function readCreateLink(text, net) {
+  const fields = fieldsOf(text, 'create', net);
+  const input = longBytes(fields, 'input');
+  let name = null;
+  if (fields.name) {
+    name = linkText(fields.name);
+    if (!name) throw new Error('The link’s name is too long, or holds characters that could hide what it says');
+  }
+  if (fields.coin && !/^[0-9a-f]{64}$/i.test(fields.coin)) throw new Error('The link’s coin is not 64 hex digits');
+  // An amount with a dot, `12.5`: `1,5` or `1,000` could mean two things.
+  if (fields.amount && !/^\d+(\.\d+)?$/.test(fields.amount)) throw new Error('The link’s amount is not written as links write one, like 12.5');
+  return { input, name, coin: fields.coin?.toLowerCase() ?? null, amount: fields.amount ?? null };
+}
+
 let held = null;
 
 /** Keeps a link scanned or pasted in the wallet for the screen it opens; null forgets it. */
