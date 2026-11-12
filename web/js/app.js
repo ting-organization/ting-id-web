@@ -49,12 +49,20 @@ export async function show() {
   currentName = name;
   drawNav(name);
   const view = $('#view');
+  // A screen that reads the chain before it draws shows a bar at the top meanwhile.
+  const slow = setTimeout(() => document.body.classList.add('busy'), 120);
+  const done = () => {
+    clearTimeout(slow);
+    if (current === token) document.body.classList.remove('busy');
+  };
   try {
     const html = await screen.render(...args);
+    done();
     if (current !== token) return;
     view.innerHTML = html;
     await screen.bind?.(view, ...args);
   } catch (e) {
+    done();
     if (current !== token) return;
     view.innerHTML = `<section class="screen plain narrow"><h1 class="page">Something went wrong</h1>
       <div class="stack mt"><div class="note bad">${icon('warn')}<div>${esc(problem(e))}</div></div>
@@ -80,6 +88,6 @@ session.onChange(() => {
   if (LIVE.has(currentName) && !document.querySelector('#view :focus')) show();
 });
 
+// index.html shows the navy band with "Reading the chain…" until the first screen is drawn.
 applyTheme();
-$('#view').innerHTML = '<section class="screen plain center mt"><span class="spinner"></span></section>';
 session.open().catch(() => {}).finally(show);

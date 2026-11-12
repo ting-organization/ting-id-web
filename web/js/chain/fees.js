@@ -1,17 +1,42 @@
 // The automatic fee, as Ting ID sets it: what recent paying transactions paid
 // for a whole block's worth of room, at the median, times the share of a
 // block this transaction takes. Read from the newest blocks only when a fee
-// is about to be shown, and kept for a few minutes.
+// is about to be shown, and kept for ten minutes, in this browser too, so
+// that opening Send again reads nothing.
 import { equal, Reader, unhex } from '../../../kit/web/bytes.js';
 import { H } from '../../../kit/web/ting.js';
 import { TOPICS } from './coins.js';
 
 const PAYMENT = H('app/event/producer-payment-v1');
 const ZERO = new Uint8Array(32);
-/** Blocks read back at most: three requests. */
-const LOOK_BACK = 300;
+/** Blocks read back at most: two requests. */
+const LOOK_BACK = 200;
 const SAMPLES = 50;
-const cache = new Map();
+const KEEP_MS = 600_000;
+const STORE = 'ting-id-web/fees';
+const cache = new Map(Object.entries(load()));
+
+function load() {
+  try {
+    return JSON.parse(localStorage.getItem(STORE) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function keep() {
+  try {
+    localStorage.setItem(STORE, JSON.stringify(Object.fromEntries(cache)));
+  } catch {
+    // only kept for this visit
+  }
+}
+
+/** The fee worked out in the last ten minutes, or null: what Send shows at once. */
+export function knownFee(coin, kind = 'own') {
+  const hit = cache.get(`${coin}:${kind}`);
+  return hit && Date.now() - hit.at < KEEP_MS ? BigInt(hit.fee) : null;
+}
 
 /**
  * What a passkey payment uses, in C, S, D, G: a coin transfer whose
@@ -36,8 +61,8 @@ function twoDigits(v) {
  */
 export async function autoFee(pool, coin, kind = 'own') {
   const key = `${coin}:${kind}`;
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < 300_000) return hit.fee;
+  const known = knownFee(coin, kind);
+  if (known !== null) return known;
   const rates = [];
   let limits = null;
   let to = pool.height;
@@ -77,6 +102,7 @@ export async function autoFee(pool, coin, kind = 'own') {
     const median = rates[Math.floor(rates.length / 2)];
     fee = twoDigits(BigInt(Math.max(1, Math.ceil(median * shareOf(SHARES[kind], limits)))));
   }
-  cache.set(key, { fee, at: Date.now() });
+  cache.set(key, { fee: fee.toString(), at: Date.now() });
+  keep();
   return fee;
 }

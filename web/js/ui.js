@@ -48,6 +48,30 @@ export function amount(units, decimals, maxFraction = decimals) {
   return (negative ? '−' : '') + group((v / unit).toString()) + (fraction ? '.' + fraction : '');
 }
 
+/**
+ * A balance as Ting ID shows it: 6 significant digits, cut, not rounded, and
+ * at least 2 decimals: `239 756.16`, `6 330`, `0.000123456`. For anything
+ * signed or confirmed, `amount` gives the exact figure.
+ */
+export function shortAmount(units, decimals) {
+  const negative = units < 0n;
+  const v = negative ? -units : units;
+  const unit = 10n ** BigInt(decimals);
+  const whole = v / unit;
+  const digits = (v % unit).toString().padStart(decimals, '0');
+  let keep;
+  if (whole > 0n) keep = Math.max(2, 6 - whole.toString().length);
+  else {
+    const lead = digits.search(/[1-9]/);
+    keep = lead < 0 ? 2 : Math.max(2, lead + 6);
+  }
+  const fraction = digits.slice(0, Math.min(keep, decimals)).replace(/0+$/, '');
+  return (negative ? '−' : '') + group(whole.toString()) + (fraction ? '.' + fraction : '');
+}
+
+/** An amount's text as HTML, its fraction smaller and fainter. */
+export const fractionHtml = (text) => esc(text).replace(/\.(\d+)/, '<span class="frac">.$1</span>');
+
 /** Units of a decimal amount such as `12.5`, or null. */
 export function parseAmount(text, decimals) {
   const m = String(text).trim().replace(/[\s,_ ]/g, '').match(/^(\d*)(?:\.(\d*))?$/);
@@ -121,6 +145,54 @@ export async function copy(text, what = 'Copied') {
   } catch {
     toast('Could not copy: select it instead');
   }
+}
+
+/**
+ * A bottom sheet (a centred dialog on wide screens), as Ting ID shows choices
+ * and confirmations. Closes on its backdrop, Escape, or `close()`.
+ */
+export function openSheet(inner, { onClose } = {}) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'sheet';
+  dialog.innerHTML = `<div class="grip" aria-hidden="true"></div>${inner}`;
+  document.body.append(dialog);
+  dialog.addEventListener('close', () => {
+    dialog.remove();
+    onClose?.();
+  });
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+  dialog.showModal();
+  return { dialog, close: () => dialog.close() };
+}
+
+/**
+ * Asks in a sheet: a confirmation (resolves true), or fields (resolves their
+ * values). Resolves null when the user goes back. The back button is never
+ * "Cancel"; the confirm button names the action.
+ */
+export function ask({ title, text = '', fields = [], confirm = 'OK', back = 'Back', danger = false }) {
+  return new Promise((resolve) => {
+    let result = null;
+    const field = (f) => `<label class="field boxed"><span>${esc(f.label)}</span>${f.multiline
+      ? `<textarea name="${f.name}" rows="3" spellcheck="false" placeholder="${esc(f.placeholder ?? '')}">${esc(f.value ?? '')}</textarea>`
+      : `<input name="${f.name}" value="${esc(f.value ?? '')}" placeholder="${esc(f.placeholder ?? '')}" ${f.inputmode ? `inputmode="${f.inputmode}"` : ''} autocomplete="off" spellcheck="false">`}
+      ${f.hint ? `<span class="hint">${esc(f.hint)}</span>` : ''}</label>`;
+    const { dialog, close } = openSheet(`<form class="sheet-body">
+      <h2>${esc(title)}</h2>${text ? `<p class="muted">${esc(text)}</p>` : ''}
+      ${fields.map(field).join('')}
+      <div class="sheet-actions"><button type="button" class="btn secondary" data-back>${esc(back)}</button>
+        <button class="btn ${danger ? 'destructive' : 'primary'}">${esc(confirm)}</button></div></form>`, { onClose: () => resolve(result) });
+    const form = $('form', dialog);
+    $('[data-back]', dialog).addEventListener('click', close);
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      result = fields.length ? Object.fromEntries(new FormData(form)) : true;
+      close();
+    });
+    $('input, textarea', dialog)?.focus();
+  });
 }
 
 /** A friendly sentence for an error from a passkey, a node or the chain. */

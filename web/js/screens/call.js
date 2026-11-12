@@ -7,7 +7,7 @@ import * as tcr from '../../../kit/web/tcr.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
 import { autoFee } from '../chain/fees.js';
-import { coinMark, money, notices, who } from '../parts.js';
+import { coinMark, exactMoney as money, notices, who } from '../parts.js';
 import { session } from '../session.js';
 import { $, amount, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
 import { device } from './identity.js';

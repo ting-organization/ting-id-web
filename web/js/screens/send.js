@@ -4,11 +4,11 @@ import { qrSvg } from '../../../kit/web/qr.js';
 import { idOf } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
-import { autoFee } from '../chain/fees.js';
-import { accountBox, coinMark, money, notices, who } from '../parts.js';
+import { autoFee, knownFee } from '../chain/fees.js';
+import { accountBox, coinMark, exactMoney, money, notices, who } from '../parts.js';
 import { reasonOf, session } from '../session.js';
 import * as store from '../store.js';
-import { $, $$, amount, copy, duration, esc, grouped, icon, initials, parseAmount, problem, short, toast, when } from '../ui.js';
+import { $, $$, amount, ask, copy, duration, esc, fractionHtml, grouped, icon, initials, openSheet, parseAmount, problem, short, shortAmount, toast, when } from '../ui.js';
 import { currentCoin } from './wallet.js';
 
 /** The payment being written: it survives a trip to Review and back. */
@@ -51,29 +51,27 @@ export const send = {
     const { coin, account } = current();
     if (!coin) return `<section class="screen plain narrow"><h1 class="page">Send</h1><div class="note mt">${icon('info')}<div>Follow a coin in Settings first.</div></div></section>`;
     draft.coin = coin.id;
-    if (draft.feeAuto && !account.delay) draft.fee = await autoFee(session.pool, coin.id).catch(() => 0n);
+    // The screen draws at once: a fee worked out lately is shown, a new one fills in when ready.
+    if (draft.feeAuto && !account.delay) draft.fee = knownFee(coin.id);
     if (account.delay) draft.fee = 0n;
     const toId = idOf(draft.to.replace(/\s+/g, ''));
     const toName = toId ? store.nameOf(hex(toId), session.accounts()) : null;
-    const contacts = store.get().contacts;
-    const own = session.accounts().map((a, n) => ({ name: `Your ${n === 1 ? 'Savings' : n === 0 ? 'Spending' : `account ${n + 1}`}`, account: a }))
-      .filter((o) => o.account !== hex(account.account));
-    const choices = [...own, ...contacts].map((c) => `<button class="row" type="button" data-pick="${c.account}"><span class="avatar">${esc(initials(c.name))}</span><span class="main"><b>${esc(c.name)}</b><span class="mono">${short(c.account)}</span></span></button>`).join('');
     return `<section class="screen plain narrow">
       <div class="head"><h1>Send</h1></div>
       ${notices()}
       <div class="card list">
         <button class="row" type="button" data-from>${coinMark(coin)}<span class="main"><b>${esc(session.saved()?.name ?? 'You')} · ${esc(account.name)}</b>
-          <span>${money(account.record.available, coin)} available · ${account.delay ? `${duration(account.delay)} lock` : 'Instant'}</span></span>${icon('swap')}</button>
+          <span>${money(account.record.available, coin)} available · ${account.delay ? `${duration(account.delay)} lock` : 'Instant'}</span></span>${icon('chevron')}</button>
       </div>
       ${account.delay ? `<div class="note warn mt">${icon('lock')}<div>Withdrawals from ${esc(account.name)} wait ${esc(duration(account.delay))}: it runs when the lock ends, and you can cancel it until then.</div></div>` : ''}
       <div class="card mt">
         <label class="field"><span>Amount</span><div class="amount-input"><input name="amount" inputmode="decimal" placeholder="0" value="${esc(draft.amount)}" autocomplete="off"><em>${esc(coin.symbol)}</em>
           <button class="btn small secondary" type="button" data-max>Max</button></div></label>
-        <label class="field"><span>To</span><textarea name="to" rows="2" spellcheck="false" placeholder="Account or pay link">${esc(toId ? grouped(toId) : draft.to)}</textarea>
-          ${toName ? `<div class="hint">${esc(toName)}</div>` : ''}</label>
-        ${choices ? `<details class="field"><summary class="link">${icon('people')} Choose from your accounts and contacts</summary><div class="list">${choices}</div></details>` : ''}
-        <div class="kv"><span>Fee</span><span>${draft.fee ? `${money(draft.fee, coin)} · ${esc(account.name)}` : 'None'} <button class="link" type="button" data-fee>Change</button></span></div>
+        <div class="field"><span>To</span><div class="to-line"><textarea name="to" rows="2" spellcheck="false" placeholder="Account or pay link">${esc(toId ? grouped(toId) : draft.to)}</textarea>
+          <button class="icon-button" type="button" data-recipients aria-label="Choose a recipient">${icon('people')}</button>
+          <a class="icon-button" href="#/scan" aria-label="Scan a code">${icon('scan')}</a></div>
+          ${toName ? `<div class="hint">${esc(toName)}</div>` : ''}</div>
+        <div class="kv"><span>Fee</span><span><span data-fee-text>${feeText(coin, account)}</span> <button class="link" type="button" data-fee>Change</button></span></div>
       </div>
       <div class="note warn mt" data-problems hidden></div>
       <button class="btn primary mt" data-review>Review</button>
@@ -83,6 +81,14 @@ export const send = {
   bind(view) {
     const { coin, account } = current();
     if (!coin) return;
+    if (draft.feeAuto && !account.delay && draft.fee === null) {
+      autoFee(session.pool, coin.id).catch(() => 0n).then((fee) => {
+        if (!draft.feeAuto || draft.coin !== coin.id) return;
+        draft.fee = fee;
+        const text = $('[data-fee-text]', view);
+        if (text) text.innerHTML = feeText(coin, account);
+      });
+    }
     const form = { amount: $('[name=amount]', view), to: $('[name=to]', view) };
     form.amount.addEventListener('input', () => { draft.amount = form.amount.value; });
     form.to.addEventListener('input', () => {
@@ -95,28 +101,60 @@ export const send = {
       draft.amount = most > 0n ? amount(most, coin.decimals).replace(/ /g, '') : '0';
       form.amount.value = draft.amount;
     });
+    const redraw = () => dispatchEvent(new HashChangeEvent('hashchange'));
+    const row = (c, caption) => `<button class="row" type="button" data-value="${c.value}"><span class="avatar">${c.icon ? icon(c.icon) : esc(initials(c.name))}</span>
+      <span class="main"><b>${esc(c.name)}</b><span>${esc(caption)}</span></span></button>`;
     $('[data-from]', view).addEventListener('click', () => {
-      draft.slot = (draft.slot + 1) % coin.accounts.length;
-      draft.feeAuto = true;
-      location.hash = '#/send';
-      dispatchEvent(new HashChangeEvent('hashchange'));
+      const rows = session.coins.flatMap((c) => c.accounts.map((a) => row(
+        { value: `${c.id}:${a.slot}`, name: `${session.saved()?.name ?? 'You'} · ${a.name}`, icon: a.delay ? 'lock' : 'wallet' },
+        `${shortText(a.record.available, c)} available · ${a.delay ? `withdrawals wait ${duration(a.delay)}` : 'instant'}`))).join('');
+      const { dialog, close } = openSheet(`<div class="sheet-body"><h2>Send from</h2><div class="card list">${rows}</div></div>`);
+      dialog.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-value]');
+        if (!b) return;
+        const [coinId, slot] = b.dataset.value.split(':');
+        draft.coin = coinId;
+        draft.slot = Number(slot);
+        draft.feeAuto = true;
+        close();
+        redraw();
+      });
     });
-    $$('[data-pick]', view).forEach((b) => b.addEventListener('click', () => {
-      draft.to = b.dataset.pick;
-      dispatchEvent(new HashChangeEvent('hashchange'));
-    }));
-    $('[data-fee]', view).addEventListener('click', () => {
+    $('[data-recipients]', view).addEventListener('click', () => {
+      const own = session.accounts().map((a, n) => ({ value: a, name: `Your ${n === 0 ? 'Spending' : n === 1 ? 'Savings' : `account ${n + 1}`}`, icon: n ? 'lock' : 'wallet', n }))
+        .filter((o) => o.value !== hex(account.account));
+      const contacts = store.get().contacts;
+      const body = `<div class="sheet-body"><h2>Recipient</h2>
+        ${own.length ? `<div class="group-title">Your accounts</div><div class="card list">${own.map((o) => row(o, session.identity.slots[o.n] ? `withdrawals wait ${duration(session.identity.slots[o.n])}` : 'instant')).join('')}</div>` : ''}
+        <div class="group-title">Contacts</div>
+        <div class="card list">${contacts.map((c) => row({ value: c.account, name: c.name }, short(c.account))).join('')
+          || '<div class="row"><span class="main"><span class="wrap">No contacts yet. Accounts you pay can be saved by name.</span></span></div>'}</div></div>`;
+      const { dialog, close } = openSheet(body);
+      dialog.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-value]');
+        if (!b) return;
+        draft.to = b.dataset.value;
+        close();
+        redraw();
+      });
+    });
+    $('[data-fee]', view).addEventListener('click', async () => {
       if (account.delay) return toast('A withdrawal from a locked account carries no fee of its own');
-      const text = prompt(`Fee in ${coin.symbol} (empty for automatic)`, draft.fee ? amount(draft.fee, coin.decimals).replace(/ /g, '') : '');
-      if (text === null) return;
-      if (!text.trim()) draft.feeAuto = true;
+      const answer = await ask({
+        title: 'Fee',
+        text: 'Automatic: what recent transactions paid for the same room in a block.',
+        fields: [{ name: 'fee', label: `Fee (${coin.symbol})`, value: draft.feeAuto ? '' : amount(draft.fee ?? 0n, coin.decimals).replace(/\u202f/g, ''), placeholder: 'Automatic', inputmode: 'decimal' }],
+        confirm: 'Done',
+      });
+      if (!answer) return;
+      if (!answer.fee.trim()) draft.feeAuto = true;
       else {
-        const v = parseAmount(text, coin.decimals);
+        const v = parseAmount(answer.fee, coin.decimals);
         if (v === null) return toast('Not an amount');
         draft.fee = v;
         draft.feeAuto = false;
       }
-      dispatchEvent(new HashChangeEvent('hashchange'));
+      redraw();
     });
     $('[data-review]', view).addEventListener('click', () => {
       draft.amount = form.amount.value;
@@ -132,6 +170,15 @@ export const send = {
     });
   },
 };
+
+const shortText = (units, coin) => `${shortAmount(units, coin.decimals)} ${coin.symbol}`;
+
+/** The fee row: working out, none, or the amount and the account it comes from. */
+function feeText(coin, account) {
+  if (account.delay) return 'None';
+  if (draft.fee === null) return '<span class="muted">Working it out…</span>';
+  return draft.fee ? `${money(draft.fee, coin)} · ${esc(account.name)}` : 'None';
+}
 
 function useLink(text) {
   const link = text.slice(text.indexOf('ting:'));
@@ -150,18 +197,18 @@ export const review = {
     return `<section class="screen plain narrow">
       <button class="back" data-edit>${icon('back')} Edit</button>
       <h1 class="page">Review payment</h1>
-      <div class="big-amount">${coinMark(coin, true)}<b>${amount(units, coin.decimals)}<small>${esc(coin.symbol)}</small></b>
+      <div class="big-amount">${coinMark(coin, true)}<b>${fractionHtml(amount(units, coin.decimals))}<small>${esc(coin.symbol)}</small></b>
         <p>${lock ? `Runs when the ${esc(duration(lock))} lock ends` : 'Goes as soon as a block includes it'}</p></div>
       <div class="card">
         <div class="kv"><span>From</span><span>${esc(session.saved()?.name ?? 'You')} · ${esc(account.name)}</span></div>
         <div class="kv block"><span>To</span><div>${name ? `<b>${esc(name)}</b> <span class="mono muted">${short(to)}</span>` : `<b>New recipient</b>${accountBox(to)}
           <button class="link" data-save>${icon('userplus')} Save as contact</button>`}</div></div>
         <div class="kv"><span>When</span><span>${lock ? `In ${esc(duration(lock))}` : 'Now'}</span></div>
-        <div class="kv"><span>Fee</span><span>${fee ? money(fee, coin) : 'None'}</span></div>
-        <div class="kv"><span>Total from ${esc(account.name)}</span><span>${money(units + fee, coin)}</span></div>
-        <div class="kv"><span>Available after</span><span>${money(account.record.available - units - fee, coin)}</span></div>
+        <div class="kv"><span>Fee</span><span>${fee ? exactMoney(fee, coin) : 'None'}</span></div>
+        <div class="kv"><span>Total from ${esc(account.name)}</span><span>${exactMoney(units + fee, coin)}</span></div>
+        <div class="kv"><span>Available after</span><span>${exactMoney(account.record.available - units - fee, coin)}</span></div>
       </div>
-      ${lock ? `<div class="note warn">${icon('lock')}<div>${money(units, coin)} is reserved until it runs, and you can cancel it from the wallet until then.</div></div>` : ''}
+      ${lock ? `<div class="note warn">${icon('lock')}<div>${exactMoney(units, coin)} is reserved until it runs, and you can cancel it from the wallet until then.</div></div>` : ''}
       ${name ? '' : `<div class="note">${icon('user')}<div>This account is not in your contacts. Check the address with whoever you pay: a payment cannot be taken back once it runs.</div></div>`}
       <button class="btn primary mt" data-confirm>${icon('key')} Confirm and ${lock ? 'schedule' : 'send'}</button>
       <button class="link" data-edit>Edit</button>
@@ -171,10 +218,10 @@ export const review = {
   bind(view) {
     const { coin, account } = current();
     $$('[data-edit]', view).forEach((b) => b.addEventListener('click', () => { location.hash = '#/send'; }));
-    $('[data-save]', view)?.addEventListener('click', () => {
-      const name = prompt('Name for this account');
-      if (name?.trim()) {
-        store.saveContact(name, hex(idOf(draft.to.replace(/\s+/g, ''))));
+    $('[data-save]', view)?.addEventListener('click', async () => {
+      const answer = await ask({ title: 'Save as contact', fields: [{ name: 'name', label: 'Name', placeholder: 'Their name' }], confirm: 'Save' });
+      if (answer?.name.trim()) {
+        store.saveContact(answer.name, hex(idOf(draft.to.replace(/\s+/g, ''))));
         dispatchEvent(new HashChangeEvent('hashchange'));
       }
     });
@@ -306,24 +353,6 @@ export const receive = {
       dispatchEvent(new HashChangeEvent('hashchange'));
     });
     $('[data-copy-link]', view)?.addEventListener('click', () => copy($('.kv.block .mono', view).textContent, 'Link copied'));
-  },
-};
-
-export const scan = {
-  render() {
-    return `<section class="screen plain narrow">
-      <h1 class="page">Open a link</h1>
-      <p class="lead">Paste a Ting link someone sent you: a pay link, a call link from a program’s page, or a device link.</p>
-      <div class="card"><label class="field"><span>Link</span><textarea name="link" rows="4" spellcheck="false" placeholder="ting:…"></textarea></label></div>
-      <button class="btn primary mt" data-open>Open</button>
-    </section>`;
-  },
-  bind(view) {
-    $('[data-open]', view).addEventListener('click', () => {
-      const text = $('[name=link]', view).value.trim();
-      if (!/ting:/i.test(text)) return toast('That is not a Ting link');
-      useLink(text);
-    });
   },
 };
 

@@ -3,15 +3,20 @@
 import { hex } from '../../kit/web/bytes.js';
 import { session, slotName } from './session.js';
 import * as store from './store.js';
-import { amount, day, esc, grouped, icon, initials, short, when } from './ui.js';
+import { amount, day, esc, fractionHtml, grouped, icon, initials, short, shortAmount, when } from './ui.js';
 
 export function coinMark(coin, large = false) {
   const daler = coin?.symbol === 'DLR';
   return `<span class="coinmark ${large ? 'lg' : ''} ${daler ? '' : 'other'}" aria-hidden="true">${daler ? 'D' : esc((coin?.symbol ?? '?').slice(0, 1))}</span>`;
 }
 
+/** A balance or a listed amount, as Ting ID shortens it. */
 export const money = (units, coin, signed = '') =>
-  `${signed}${amount(BigInt(units), coin.decimals, 6)} ${esc(coin.symbol)}`;
+  `${signed}${fractionHtml(shortAmount(BigInt(units), coin.decimals))}\u00a0${esc(coin.symbol)}`;
+
+/** The exact amount, for what is reviewed, signed or confirmed. */
+export const exactMoney = (units, coin, signed = '') =>
+  `${signed}${fractionHtml(amount(BigInt(units), coin.decimals))}\u00a0${esc(coin.symbol)}`;
 
 /** The notices every tab shows first: the node, and the identity's state. */
 export function notices() {

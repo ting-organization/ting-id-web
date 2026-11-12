@@ -323,3 +323,60 @@ details.field .list { margin: 8px -20px -14px; }
 .wallet .side { padding-top: 0; }
 @media (min-width: 960px) { .wallet .side h2.section:first-child { margin-top: 4px; } .wallet .lead-col .screen { padding: 0; } }
 code { font-family: var(--mono); overflow-wrap: anywhere; }
+
+/* ---- Sheets: choices and confirmations slide up from the bottom ------------- */
+
+dialog.sheet {
+  border: 0; padding: 0 0 env(safe-area-inset-bottom); margin: auto auto 0; width: 100%; max-width: 600px;
+  max-height: 88vh; overflow: auto; border-radius: 24px 24px 0 0;
+  background: var(--bg); color: var(--text); box-shadow: 0 -10px 40px rgb(0 0 0 / .2);
+}
+dialog.sheet[open] { animation: sheet-up .22s ease-out; }
+@keyframes sheet-up { from { transform: translateY(40px); opacity: .4; } to { transform: none; opacity: 1; } }
+dialog.sheet::backdrop { background: rgb(11 18 32 / .45); }
+.sheet .grip { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 10px auto 2px; }
+.sheet-body { padding: 10px 16px 18px; }
+.sheet-body h2 { font-size: 20px; font-weight: 600; margin: 6px 4px 10px; }
+.sheet-body > p { margin: 0 4px 14px; }
+.sheet-body .group-title { color: var(--muted); font-size: 12.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin: 16px 6px 8px; }
+.sheet-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.field.boxed { background: var(--card); border: 1px solid var(--line); border-radius: 14px; margin-top: 10px; }
+.btn.destructive { background: var(--red); color: #fff; }
+@media (min-width: 960px) {
+  dialog.sheet { margin: auto; border-radius: 20px; max-width: 520px; padding-bottom: 0; }
+  .sheet .grip { display: none; }
+  .sheet-body { padding: 22px 22px 22px; }
+}
+
+/* ---- The first moment, before the chain is read -------------------------- */
+
+.loading { min-height: 70vh; display: grid; place-items: center; }
+.loading .hero { width: 100%; }
+.loading-line { display: flex; align-items: center; gap: 10px; color: var(--on-navy-muted); margin-top: 18px; }
+.loading-line .spinner { width: 16px; height: 16px; border-width: 2px; }
+
+/* ---- Amounts: the fraction smaller and fainter, as in Ting ID --------------- */
+
+.frac { font-size: .78em; opacity: .6; }
+.to-line { display: flex; align-items: flex-start; gap: 6px; }
+.to-line textarea { flex: 1; }
+.icon-button { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--accent); cursor: pointer; flex: none; }
+
+/* ---- The camera ------------------------------------------------------------ */
+
+.camera { position: relative; aspect-ratio: 1; width: 100%; max-width: 480px; margin: 0 auto; border-radius: 20px; overflow: hidden; background: var(--navy); }
+.camera video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.camera .frame { position: absolute; inset: 14%; border: 3px solid rgb(255 255 255 / .9); border-radius: 18px; box-shadow: 0 0 0 999px rgb(11 18 32 / .35); }
+.camera-note { position: absolute; inset: auto 16px 16px; display: flex; gap: 10px; align-items: center; justify-content: center; padding: 10px 14px; border-radius: 12px; background: rgb(11 18 32 / .75); color: #fff; font-size: 14.5px; text-align: center; }
+.camera-note .spinner { width: 16px; height: 16px; border-width: 2px; }
+.field .amount-input input { flex: 1; min-width: 0; }
+.field .amount-input em, .field .amount-input .btn { flex: none; white-space: nowrap; }
+
+/* ---- A screen that reads the chain before it draws ------------------------- */
+
+body.busy::before {
+  content: ''; position: fixed; inset: 0 0 auto 0; height: 3px; z-index: 50; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: busy 1s ease-in-out infinite;
+}
+@keyframes busy { from { transform: translateX(-100%); } to { transform: translateX(100%); } }

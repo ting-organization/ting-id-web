@@ -5,7 +5,7 @@ import * as coins from '../chain/coins.js';
 import { activityList, coinMark, notices, scheduledList, waitingList } from '../parts.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
-import { $$, amount, esc, icon, initials, problem, toast } from '../ui.js';
+import { $$, esc, fractionHtml, icon, initials, problem, shortAmount, toast } from '../ui.js';
 
 export function currentCoin() {
   const want = store.get().coin;
@@ -23,12 +23,12 @@ function hero() {
   const total = coin.accounts.reduce((sum, a) => sum + a.record.balance, 0n);
   const tiles = coin.accounts.slice(0, 2).map((a) => `<div>
       <span>${a.delay ? icon('lock') : ''}${esc(a.name)}</span>
-      <b>${amount(a.record.available, coin.decimals, 2)}</b>
-      ${a.record.locked ? `<span>${amount(a.record.locked, coin.decimals, 2)} reserved</span>` : ''}</div>`).join('');
+      <b>${fractionHtml(shortAmount(a.record.available, coin.decimals))}</b>
+      ${a.record.locked ? `<span>${fractionHtml(shortAmount(a.record.locked, coin.decimals))} reserved</span>` : ''}</div>`).join('');
   const choose = session.coins.length > 1 ? `<button class="link on-navy" data-coins>${icon('chevron')}</button>` : '';
   return `<div class="hero">${top}
     <div class="coin">${coinMark(coin)} ${esc(coin.name)} ${choose}</div>
-    <div class="total">${amount(total, coin.decimals, 2)}<small>${esc(coin.symbol)}</small></div>
+    <div class="total">${fractionHtml(shortAmount(total, coin.decimals))}<small>${esc(coin.symbol)}</small></div>
     <div class="split">${tiles}</div>${actions()}</div>`;
 }
 

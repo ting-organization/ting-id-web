@@ -5,7 +5,7 @@ import * as coins from '../chain/coins.js';
 import { nodeAddress } from '../chain/net.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
-import { $, $$, esc, icon, problem, short, toast } from '../ui.js';
+import { $, $$, ask, esc, icon, problem, short, toast } from '../ui.js';
 
 export function applyTheme() {
   const theme = store.get().theme ?? 'system';
@@ -102,8 +102,9 @@ export const settings = {
       await session.refresh(true);
       dispatchEvent(new HashChangeEvent('hashchange'));
     }));
-    $('[data-forget]', view)?.addEventListener('click', () => {
-      if (!confirm('Forget this identity in this browser? It stays on chain, and your passkey can open it again.')) return;
+    $('[data-forget]', view)?.addEventListener('click', async () => {
+      const sure = await ask({ title: 'Forget this identity here?', text: 'It stays on chain, and your passkey can open it again: Use an existing identity, then With a passkey.', confirm: 'Forget it', back: 'Keep it', danger: true });
+      if (!sure) return;
       session.forget();
       location.hash = '#/welcome';
     });

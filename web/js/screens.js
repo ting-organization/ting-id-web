@@ -2,7 +2,8 @@
 import { link } from './screens/call.js';
 import { create, identity, restore } from './screens/identity.js';
 import { people, person } from './screens/people.js';
-import { receive, review, scan, send, tx } from './screens/send.js';
+import { receive, review, send, tx } from './screens/send.js';
+import { scan } from './screens/scan.js';
 import { settings } from './screens/settings.js';
 import { wallet } from './screens/wallet.js';
 import { welcome } from './screens/welcome.js';

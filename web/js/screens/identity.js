@@ -12,7 +12,7 @@ import * as passkey from '../passkey.js';
 import { accountBox, notices } from '../parts.js';
 import { session, slotName } from '../session.js';
 import * as store from '../store.js';
-import { $, $$, copy, duration, esc, grouped, icon, initials, problem, short, toast, when } from '../ui.js';
+import { $, $$, ask, copy, duration, esc, grouped, icon, initials, problem, short, toast, when } from '../ui.js';
 
 const KNOWN_POLICIES = () => ({
   [session.net.policyWebauthn ?? '']: 'Passkey',
@@ -82,7 +82,6 @@ export const identity = {
         ${id.onChain && mine == null ? notThisBrowser(saved) : ''}
         <h2 class="section">Devices</h2>
         <div class="card list">${devices || '<div class="row"><span class="main"><span>None yet</span></span></div>'}</div>
-        ${mine != null ? `<button class="link" data-add-device>${icon('plus')} Add a device</button>` : ''}
         ${pending ? `<h2 class="section">Pending changes</h2><div class="card list">${pending}</div>
           <p class="muted small">A change waits ${esc(duration(core.changeDelay))}; until then any of your devices can cancel it.</p>` : ''}
         <h2 class="section">Guardians</h2>
@@ -111,8 +110,8 @@ export const identity = {
         b.disabled = false;
       }
     };
-    $$('[data-remove]', view).forEach((b) => b.addEventListener('click', act(() =>
-      confirm(`Remove device #${b.dataset.remove}? It takes effect after ${duration(id.core.changeDelay)}.`)
+    $$('[data-remove]', view).forEach((b) => b.addEventListener('click', act(async () =>
+      (await ask({ title: `Remove device #${b.dataset.remove}?`, text: `It takes effect after ${duration(id.core.changeDelay)}; until then any of your devices can cancel it.`, confirm: 'Remove device', danger: true }))
         && propose([{ kind: 'removeKey', keyId: BigInt(b.dataset.remove) }], `Remove device #${b.dataset.remove}`))));
     $$('[data-cancel]', view).forEach((b) => b.addEventListener('click', act(async () => {
       const signer = session.signer();
@@ -121,14 +120,19 @@ export const identity = {
     })));
     $$('[data-apply]', view).forEach((b) => b.addEventListener('click', act(() =>
       session.call(session.registry, registry.applyInput(id.id, BigInt(b.dataset.apply)), BUDGETS.execute, `Apply change #${b.dataset.apply}`))));
-    $$('[data-unlink]', view).forEach((b) => b.addEventListener('click', act(() =>
-      confirm(`Unlink this guardian? It takes effect after ${duration(id.core.changeDelay)}.`)
+    $$('[data-unlink]', view).forEach((b) => b.addEventListener('click', act(async () =>
+      (await ask({ title: 'Unlink this guardian?', text: `It takes effect after ${duration(id.core.changeDelay)}; until then any of your devices can cancel it.`, confirm: 'Unlink', danger: true }))
         && propose([{ kind: 'removeGuardian', guardian: unhex(b.dataset.unlink) }], 'Unlink a guardian'))));
-    $('[data-add-device]', view)?.addEventListener('click', () => { location.hash = '#/scan'; });
     $('[data-link-guardian]', view)?.addEventListener('click', act(async () => {
-      const text = prompt('The guardian’s identity ID (64 hex digits). Link only someone you know.');
-      const g = idOf((text ?? '').replace(/\s+/g, ''));
-      if (!g) return null;
+      const answer = await ask({
+        title: 'Link a guardian',
+        text: 'A guardian is someone you know and trust. Enough of them together can give your identity new keys if you lose every device.',
+        fields: [{ name: 'id', label: 'Their identity ID', placeholder: '64 hex digits', multiline: true }],
+        confirm: 'Propose',
+      });
+      if (!answer) return null;
+      const g = idOf(answer.id.replace(/\s+/g, ''));
+      if (!g) throw new Error('An identity ID is 64 hex digits');
       if (hex(g) === hex(id.id)) throw new Error('An identity cannot guard itself');
       const exists = await session.pool.record(session.registry, registry.coreKey(g));
       if (!exists) throw new Error('No identity has that ID on this network: a guardian must be an identity, not an account');
@@ -210,14 +214,18 @@ export const device = {
   },
 };
 
-const createState = { savings: null };
+/**
+ * The time locks of a new identity, as Ting ID sets them: Savings and changes
+ * wait 7 days, a recovery 2. The development chain uses minutes, to test them.
+ */
+const locks = () => (session.net.key === 'development'
+  ? { savings: 120, change: 600, recovery: 300 }
+  : { savings: registry.DEFAULTS.savingsDelay, change: registry.DEFAULTS.changeDelay, recovery: registry.DEFAULTS.recoveryDelay });
 
 export const create = {
   render() {
     const net = session.net;
-    const dev = net.key === 'development';
-    const presets = dev ? [[120, '2 minutes'], [3600, '1 hour'], [604_800, '7 days']] : [[86_400, '1 day'], [172_800, '2 days'], [604_800, '7 days'], [2_592_000, '30 days']];
-    createState.savings ??= dev ? 120 : 604_800;
+    const lock = locks();
     const ready = session.policyReady;
     return `<section class="screen plain narrow">
       <button class="back" data-back>${icon('back')} Back</button>
@@ -226,33 +234,28 @@ export const create = {
       ${ready ? '' : `<div class="note warn">${icon('warn')}<div>Ting ID Web is not on ${esc(net.name)} yet: its passkey program has not been deployed there. Choose another network in Settings.</div></div>`}
       <div class="card">
         <label class="field"><span>Name</span><input name="name" placeholder="Your name" maxlength="40" autocomplete="name"></label>
-        <div class="field"><span>Savings withdrawals wait</span><div class="seg">${presets.map(([s, label]) => `<button type="button" data-savings="${s}" class="${s === createState.savings ? 'on' : ''}">${label}</button>`).join('')}</div></div>
       </div>
-      <p class="muted small">Changes to the identity wait ${dev ? '10 minutes' : '7 days'}, and a recovery by guardians ${dev ? '5 minutes' : '2 days'}. You can add guardians later.</p>
+      <p class="muted small">Withdrawals from Savings wait ${esc(duration(lock.savings))}, changes to the identity ${esc(duration(lock.change))}, and a recovery by guardians ${esc(duration(lock.recovery))}. You can add guardians later.</p>
       <button class="btn primary mt" data-create ${ready ? '' : 'disabled'}>${icon('key')} Create with a passkey</button>
       <p class="center muted small">Your device asks for Face ID, Touch ID or its PIN to make the passkey. The identity is on chain once the next block includes it.</p>
     </section>`;
   },
   bind(view) {
     $('[data-back]', view).addEventListener('click', () => { location.hash = '#/welcome'; });
-    $$('[data-savings]', view).forEach((b) => b.addEventListener('click', () => {
-      createState.savings = Number(b.dataset.savings);
-      $$('[data-savings]', view).forEach((x) => x.classList.toggle('on', x === b));
-    }));
     $('[data-create]', view).addEventListener('click', async (e) => {
       const button = e.currentTarget;
       const name = $('[name=name]', view).value.trim() || 'Me';
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span> Making your passkey';
       try {
-        const dev = session.net.key === 'development';
+        const lock = locks();
         const handle = crypto.getRandomValues(new Uint8Array(32));
         const made = await passkey.create({ name: `${name} · Ting`, handle });
         const creation = registry.creation({
           keys: [{ policy: unhex(session.net.policyWebauthn), params: made.publicKey }],
-          slots: [0, createState.savings],
-          changeDelay: dev ? 600 : registry.DEFAULTS.changeDelay,
-          recoveryDelay: dev ? 300 : registry.DEFAULTS.recoveryDelay,
+          slots: [0, lock.savings],
+          changeDelay: lock.change,
+          recoveryDelay: lock.recovery,
         });
         const id = registry.idOf(creation);
         session.keep({
@@ -306,7 +309,8 @@ export const restore = {
         const pick = found[0];
         const read = await registry.readIdentity(session.pool, session.registry, pick.id);
         const key = read.keys.find((k) => hex(k.policy) === session.net.policyWebauthn && candidates.some((c) => hex(c) === hex(k.params)));
-        const name = prompt('A name for this identity on this device', 'Me')?.trim() || 'Me';
+        const named = await ask({ title: 'Found your identity', text: `Identity ${short(pick.id)}. What should this device call it?`, fields: [{ name: 'name', label: 'Name', value: 'Me' }], confirm: 'Open it' });
+        const name = named?.name.trim() || 'Me';
         session.keep({ id: hex(pick.id), name, publicKey: hex(key.params), credentialId: hex(signed.credentialId), createdHeight: pick.height, guardians: [], coins: [] });
         await session.refresh(true);
         location.hash = '#/wallet';
@@ -315,12 +319,17 @@ export const restore = {
       }
     });
     $('[data-with-id]', view).addEventListener('click', async () => {
-      const text = prompt('Your identity’s ID (64 hex digits)');
-      const id = idOf((text ?? '').replace(/\s+/g, ''));
-      if (!id) return text && toast('An identity ID is 64 hex digits');
+      const answer = await ask({
+        title: 'Your identity’s ID',
+        fields: [{ name: 'id', label: 'Identity ID', placeholder: '64 hex digits', multiline: true }, { name: 'name', label: 'Name on this device', value: 'Me' }],
+        confirm: 'Add identity',
+      });
+      if (!answer) return;
+      const id = idOf(answer.id.replace(/\s+/g, ''));
+      if (!id) return toast('An identity ID is 64 hex digits');
       const core = await session.pool.record(session.registry, registry.coreKey(id)).catch(() => null);
       if (!core) return toast('No identity with that ID on this network');
-      const name = prompt('A name for this identity on this device', 'Me')?.trim() || 'Me';
+      const name = answer.name.trim() || 'Me';
       session.keep({ id: hex(id), name, publicKey: null, credentialId: null, createdHeight: 1, guardians: [], coins: [] });
       await session.refresh(true);
       location.hash = '#/identity';
