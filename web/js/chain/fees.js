@@ -44,11 +44,13 @@ export function knownFee(coin, kind = 'own') {
  * registry. `createAndPay`: the batch that creates someone's identity and
  * pays it (sponsor.js), measured at 15,905,942 C, 40 S, 1,283 D and 498 G
  * for an identity of one passkey and no guardians, with room for a few more
- * keys and guardians.
+ * keys and guardians. `run`: the run of a scheduled action, unsigned, as
+ * Ting ID measured it; a withdrawal from Savings carries it as its tip.
  */
 export const SHARES = {
   own: [15_500_000, 17, 800, 76],
   createAndPay: [17_000_000, 64, 2_000, 800],
+  run: [1_480_000, 16, 712, 0],
 };
 
 const shareOf = (used, limits) => Math.max(...used.map((u, i) => Number(u) / Number(limits[i] || 1)));

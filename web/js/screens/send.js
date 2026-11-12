@@ -11,8 +11,16 @@ import * as store from '../store.js';
 import { $, $$, amount, amountProblem, ask, copy, duration, esc, fractionHtml, grouped, icon, initials, linkAmount, openSheet, parseAmount, problem, short, shortAmount, toast, when } from '../ui.js';
 import { currentCoin } from './wallet.js';
 
-/** The payment being written: it survives a trip to Review and back. */
-const draft = { coin: null, slot: 0, to: '', amount: '', fee: null, feeAuto: true };
+/**
+ * The payment being written: it survives a trip to Review and back. `fee` is
+ * paid at once, by an instant account; `runFee` is a withdrawal from a locked
+ * account's tip, paid to the miner that runs it when it falls due, and
+ * reserved with it until then (Ting wiki: programs/coin, fees and tips).
+ */
+const draft = { coin: null, slot: 0, to: '', amount: '', fee: null, feeAuto: true, runFee: null };
+
+/** What the payment costs beside its amount: the fee now, or a withdrawal's run fee; null while not worked out. */
+const extra = (account) => (account.delay ? draft.runFee : draft.fee);
 
 export function prefill({ to, coin, amount: a, slot }) {
   if (to) draft.to = to;
@@ -39,7 +47,7 @@ function problems(coin, account) {
   if (!draft.amount.trim()) out.push('Enter an amount like 12.5');
   else if (units === null) out.push(amountProblem(draft.amount, coin.decimals));
   else if (units <= 0n) out.push('The amount must be above zero');
-  else if (units + (account.delay ? 0n : draft.fee ?? 0n) > account.record.available) {
+  else if (units + (extra(account) ?? 0n) > account.record.available) {
     out.push(`Only ${amount(account.record.available, coin.decimals)} ${coin.symbol} available`);
   }
   return out;
@@ -53,7 +61,10 @@ export const send = {
     draft.coin = coin.id;
     // The screen draws at once: a fee worked out lately is shown, a new one fills in when ready.
     if (draft.feeAuto && !account.delay) draft.fee = knownFee(coin.id);
-    if (account.delay) draft.fee = 0n;
+    if (account.delay) {
+      draft.fee = 0n;
+      draft.runFee = knownFee(coin.id, 'run');
+    }
     const toId = idOf(draft.to.replace(/\s+/g, ''));
     const toName = toId ? store.nameOf(hex(toId), session.accounts()) : null;
     return `<section class="screen plain narrow">
@@ -81,12 +92,22 @@ export const send = {
   bind(view) {
     const { coin, account } = current();
     if (!coin) return;
+    const showFee = () => {
+      const text = $('[data-fee-text]', view);
+      if (text) text.innerHTML = feeText(coin, account);
+    };
     if (draft.feeAuto && !account.delay && draft.fee === null) {
       autoFee(session.pool, coin.id).catch(() => 0n).then((fee) => {
         if (!draft.feeAuto || draft.coin !== coin.id) return;
         draft.fee = fee;
-        const text = $('[data-fee-text]', view);
-        if (text) text.innerHTML = feeText(coin, account);
+        showFee();
+      });
+    }
+    if (account.delay && draft.runFee === null) {
+      autoFee(session.pool, coin.id, 'run').catch(() => 0n).then((fee) => {
+        if (draft.coin !== coin.id) return;
+        draft.runFee = fee;
+        showFee();
       });
     }
     const form = { amount: $('[name=amount]', view), to: $('[name=to]', view) };
@@ -97,7 +118,7 @@ export const send = {
       draft.to = text;
     });
     $('[data-max]', view).addEventListener('click', () => {
-      const most = account.record.available - (account.delay ? 0n : draft.fee ?? 0n);
+      const most = account.record.available - (extra(account) ?? 0n);
       draft.amount = most > 0n ? amount(most, coin.decimals).replace(/ /g, '') : '0';
       form.amount.value = draft.amount;
     });
@@ -139,7 +160,7 @@ export const send = {
       });
     });
     $('[data-fee]', view).addEventListener('click', async () => {
-      if (account.delay) return toast('A withdrawal from a locked account carries no fee of its own');
+      if (account.delay) return toast(`A withdrawal from ${account.name} pays nothing now: its run fee goes to the miner that runs it, and is set automatically`);
       const answer = await ask({
         title: 'Fee',
         text: 'Automatic: what recent transactions paid for the same room in a block.',
@@ -173,11 +194,12 @@ export const send = {
 
 const shortText = (units, coin) => `${shortAmount(units, coin.decimals)} ${coin.symbol}`;
 
-/** The fee row: working out, none, or the amount and the account it comes from. */
+/** The fee row: working out, none, or the amount, when, and the account it comes from. */
 function feeText(coin, account) {
-  if (account.delay) return 'None';
-  if (draft.fee === null) return '<span class="muted">Working it out…</span>';
-  return draft.fee ? `${money(draft.fee, coin)} · ${esc(account.name)}` : 'None';
+  const fee = extra(account);
+  if (fee === null) return '<span class="muted">Working it out…</span>';
+  if (!fee) return 'None';
+  return `${money(fee, coin)}${account.delay ? ' when it runs' : ''} · ${esc(account.name)}`;
 }
 
 function useLink(text) {
@@ -186,14 +208,19 @@ function useLink(text) {
 }
 
 export const review = {
-  render() {
+  async render() {
     const { coin, account } = current();
-    if (!coin || problems(coin, account).length) return send.render();
+    if (!coin) return send.render();
+    // Opened before the automatic fee was worked out: worked out now, never taken as none.
+    if (account.delay && draft.runFee === null) draft.runFee = await autoFee(session.pool, coin.id, 'run').catch(() => 0n);
+    if (!account.delay && draft.feeAuto && draft.fee === null) draft.fee = await autoFee(session.pool, coin.id).catch(() => 0n);
+    if (problems(coin, account).length) return send.render();
     const to = hex(idOf(draft.to.replace(/\s+/g, '')));
     const units = parseAmount(draft.amount, coin.decimals);
     const name = store.nameOf(to, session.accounts());
-    const fee = draft.fee ?? 0n;
     const lock = account.delay;
+    const fee = lock ? 0n : draft.fee ?? 0n;
+    const runFee = lock ? draft.runFee ?? 0n : 0n;
     return `<section class="screen plain narrow">
       <button class="back" data-edit>${icon('back')} Edit</button>
       <h1 class="page">Review payment</h1>
@@ -205,10 +232,11 @@ export const review = {
           <button class="link" data-save>${icon('userplus')} Save as contact</button>`}</div></div>
         <div class="kv"><span>When</span><span>${lock ? `In ${esc(duration(lock))}` : 'Now'}</span></div>
         <div class="kv"><span>Fee</span><span>${fee ? exactMoney(fee, coin) : 'None'}</span></div>
-        <div class="kv"><span>Total from ${esc(account.name)}</span><span>${exactMoney(units + fee, coin)}</span></div>
-        <div class="kv"><span>Available after</span><span>${exactMoney(account.record.available - units - fee, coin)}</span></div>
+        ${runFee ? `<div class="kv"><span>Run fee</span><span>${exactMoney(runFee, coin)}</span></div>` : ''}
+        <div class="kv"><span>Total from ${esc(account.name)}</span><span>${exactMoney(units + fee + runFee, coin)}</span></div>
+        <div class="kv"><span>Available after</span><span>${exactMoney(account.record.available - units - fee - runFee, coin)}</span></div>
       </div>
-      ${lock ? `<div class="note warn">${icon('lock')}<div>${exactMoney(units, coin)} is reserved until it runs, and you can cancel it from the wallet until then.</div></div>` : ''}
+      ${lock ? `<div class="note warn">${icon('lock')}<div>${exactMoney(units + runFee, coin)} is reserved until it runs, and you can cancel it from the wallet until then.${runFee ? ' The run fee pays the miner that runs it.' : ''}</div></div>` : ''}
       ${name ? '' : `<div class="note">${icon('user')}<div>This account is not in your contacts. Check the address with whoever you pay: a payment cannot be taken back once it runs.</div></div>`}
       <button class="btn primary mt" data-confirm>${icon('key')} Confirm and ${lock ? 'schedule' : 'send'}</button>
       <button class="link" data-edit>Edit</button>
@@ -239,6 +267,7 @@ export const review = {
         const input = await coins.actionInput({
           chain: session.chain, coin: unhex(coin.id), signer: slot, nonce,
           effect: coins.transferEffect(to, units), fee: account.delay ? 0n : draft.fee ?? 0n,
+          tip: account.delay ? draft.runFee ?? 0n : 0n,
         });
         const summary = `${amount(units, coin.decimals)} ${coin.symbol} to ${who(hex(to))}`;
         const sent = await session.call(unhex(coin.id), input, BUDGETS.execute, summary, { coin: coin.id, account: hex(account.account), nonce: nonce.toString() });
