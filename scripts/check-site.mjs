@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Checks the assembled site before it is published: every module parses,
 // every relative import and asset it names is in the site, the page keeps
-// its Content Security Policy, and the policy CodeHash the wallet trusts is
-// the one program.wasm has.
+// its Content Security Policy, the manifest's icons are there, the service
+// worker keeps exactly the site's files, and the policy CodeHash the wallet
+// trusts is the one program.wasm has.
 //
 //   node scripts/check-site.mjs _site
 import { execFileSync } from 'node:child_process';
@@ -44,6 +45,27 @@ for (const m of html.matchAll(/(?:src|href)="([^"#:]+)"/g)) {
 const css = readFileSync(join(site, 'css/app.css'), 'utf8');
 for (const m of css.matchAll(/url\('([^']+)'\)/g)) {
   if (!existsSync(resolve(site, 'css', m[1]))) problems.push(`app.css names ${m[1]}, which is not in the site`);
+}
+
+let manifest = null;
+try {
+  manifest = JSON.parse(readFileSync(join(site, 'manifest.webmanifest'), 'utf8'));
+} catch (e) {
+  problems.push(`manifest.webmanifest does not parse: ${e.message}`);
+}
+for (const icon of manifest?.icons ?? []) {
+  if (!existsSync(resolve(site, icon.src))) problems.push(`manifest.webmanifest names ${icon.src}, which is not in the site`);
+}
+if (manifest && !manifest.icons?.some((i) => i.purpose === 'maskable')) problems.push('manifest.webmanifest has no maskable icon');
+
+const worker = readFileSync(join(site, 'sw.js'), 'utf8');
+const kept = JSON.parse(/^const FILES = (\[.*\]);\r?$/m.exec(worker)?.[1] ?? '[]');
+const served = new Set(files.map((f) => relative(site, f).split('\\').join('/')).filter((f) => f !== 'sw.js'));
+if (!/^const VERSION = '[0-9a-f]{16}';\r?$/m.test(worker) || !kept.includes('./')) {
+  problems.push('sw.js was not given its files: run scripts/worker-files.mjs');
+} else {
+  for (const f of kept) if (f !== './' && !served.has(f)) problems.push(`sw.js keeps ${f}, which is not in the site`);
+  for (const f of served) if (!kept.includes(f)) problems.push(`sw.js does not keep ${f}`);
 }
 
 const code = readFileSync(new URL('../program.wasm', import.meta.url));

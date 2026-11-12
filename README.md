@@ -80,6 +80,24 @@ Not here yet: signing in to sites (TOCS-1), recovering someone as their guardian
 coin tools, and paying fees for identity changes through a batch (they go unpaid,
 as they do from Ting ID when no fee is set).
 
+## Installing
+
+The wallet installs as an app from the browser: **Install** in Chrome and Edge,
+**Add to home screen** on Android, **Share → Add to Home Screen** on iPhone. It
+then opens in a window of its own, from its own icon, and without a network too: a
+service worker, `web/sw.js`, keeps a copy of the wallet's files and uses it only
+when the network fails. Every file comes from the network first, so a fix reaches
+everyone the next time they open the wallet, and nothing a node says is kept. Back
+on a network, the wallet reads the chain again by itself.
+
+On iPhone, the app on the home screen keeps its storage apart from Safari's. Open
+it with **Use an existing identity → With a passkey**: the passkey syncs through
+iCloud Keychain, and the wallet finds its identity on the chain. Contacts saved in
+Safari stay there.
+
+The PNG icons are drawn from `web/icon.svg`'s shapes by `node scripts/icons.mjs`:
+tiles for the desktop, a maskable one for Android, and a square one for iPhone.
+
 ## Develop
 
 You need Rust (the toolchain in `rust-toolchain.toml` installs itself), Node.js 20
@@ -108,10 +126,11 @@ against the p256 crate's own verification, 2,048 of them through the packed modu
 ## Publishing
 
 `.github/workflows/pages.yml` assembles the site on every push to main with
-`scripts/site.sh` (web/ at the top, the kit's modules at kit/web/) and checks it:
-every module parses, every import and asset is in the site, the page keeps its
-Content Security Policy, and the policy CodeHash the wallet trusts is
-`program.wasm`'s. Once GitHub Pages is turned on for the repository (Source:
+`scripts/site.sh` (web/ at the top, the kit's modules at kit/web/), writes into
+its `sw.js` the files to keep and a version made from them, and checks it: every
+module parses, every import and asset is in the site, the page keeps its Content
+Security Policy, the manifest's icons are there, the service worker keeps exactly
+the site's files, and the policy CodeHash the wallet trusts is `program.wasm`'s. Once GitHub Pages is turned on for the repository (Source:
 GitHub Actions), it publishes there, at `wallet.ting-project.com`.
 
 ## Safety
