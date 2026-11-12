@@ -160,7 +160,7 @@ export const send = {
       });
     });
     $('[data-fee]', view).addEventListener('click', async () => {
-      if (account.delay) return toast(`A withdrawal from ${account.name} pays nothing now: its run fee goes to the miner that runs it, and is set automatically`);
+      if (account.delay) return toast(`A withdrawal from ${account.name} pays its fee when it runs, to the miner that runs it, and the fee is set automatically`);
       const answer = await ask({
         title: 'Fee',
         text: 'Automatic: what recent transactions paid for the same room in a block.',
@@ -194,12 +194,11 @@ export const send = {
 
 const shortText = (units, coin) => `${shortAmount(units, coin.decimals)} ${coin.symbol}`;
 
-/** The fee row: working out, none, or the amount, when, and the account it comes from. */
+/** The fee row: working out, none, or the amount and the account it comes from (a withdrawal's run fee is its fee). */
 function feeText(coin, account) {
   const fee = extra(account);
   if (fee === null) return '<span class="muted">Working it out…</span>';
-  if (!fee) return 'None';
-  return `${money(fee, coin)}${account.delay ? ' when it runs' : ''} · ${esc(account.name)}`;
+  return fee ? `${money(fee, coin)} · ${esc(account.name)}` : 'None';
 }
 
 function useLink(text) {
@@ -219,8 +218,8 @@ export const review = {
     const units = parseAmount(draft.amount, coin.decimals);
     const name = store.nameOf(to, session.accounts());
     const lock = account.delay;
-    const fee = lock ? 0n : draft.fee ?? 0n;
-    const runFee = lock ? draft.runFee ?? 0n : 0n;
+    // One fee: paid now from an instant account, or, from a locked one, when the withdrawal runs.
+    const fee = (lock ? draft.runFee : draft.fee) ?? 0n;
     return `<section class="screen plain narrow">
       <button class="back" data-edit>${icon('back')} Edit</button>
       <h1 class="page">Review payment</h1>
@@ -232,11 +231,10 @@ export const review = {
           <button class="link" data-save>${icon('userplus')} Save as contact</button>`}</div></div>
         <div class="kv"><span>When</span><span>${lock ? `In ${esc(duration(lock))}` : 'Now'}</span></div>
         <div class="kv"><span>Fee</span><span>${fee ? exactMoney(fee, coin) : 'None'}</span></div>
-        ${runFee ? `<div class="kv"><span>Run fee</span><span>${exactMoney(runFee, coin)}</span></div>` : ''}
-        <div class="kv"><span>Total from ${esc(account.name)}</span><span>${exactMoney(units + fee + runFee, coin)}</span></div>
-        <div class="kv"><span>Available after</span><span>${exactMoney(account.record.available - units - fee - runFee, coin)}</span></div>
+        <div class="kv"><span>Total from ${esc(account.name)}</span><span>${exactMoney(units + fee, coin)}</span></div>
+        <div class="kv"><span>Available after</span><span>${exactMoney(account.record.available - units - fee, coin)}</span></div>
       </div>
-      ${lock ? `<div class="note warn">${icon('lock')}<div>${exactMoney(units + runFee, coin)} is reserved until it runs, and you can cancel it from the wallet until then.${runFee ? ' The run fee pays the miner that runs it.' : ''}</div></div>` : ''}
+      ${lock ? `<div class="note warn">${icon('lock')}<div>${exactMoney(units + fee, coin)} is reserved until it runs, and you can cancel it from the wallet until then.</div></div>` : ''}
       ${name ? '' : `<div class="note">${icon('user')}<div>This account is not in your contacts. Check the address with whoever you pay: a payment cannot be taken back once it runs.</div></div>`}
       <button class="btn primary mt" data-confirm>${icon('key')} Confirm and ${lock ? 'schedule' : 'send'}</button>
       <button class="link" data-edit>Edit</button>
