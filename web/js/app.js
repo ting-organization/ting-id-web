@@ -92,3 +92,6 @@ session.onChange(() => {
 // index.html shows the navy band with "Reading the chain…" until the first screen is drawn.
 applyTheme();
 session.open().catch(() => {}).finally(show);
+
+// Installed, the wallet opens without a network too, and reads the chain once one is back: see sw.js.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

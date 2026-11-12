@@ -36,13 +36,8 @@ export const session = {
     this.pool = new Pool(this.net, nodes);
     this.chain = unhex(this.net.chainId);
     this.registry = unhex(this.net.registry);
-    await this.refresh(true);
-    // Passkeys work on a network once policy-webauthn runs there: checked by its code.
     this.policyReady = false;
-    if (this.net.policyWebauthn) {
-      const contract = await this.pool.contract(this.net.policyWebauthn).catch(() => null);
-      this.policyReady = contract?.code_hash === POLICY_CODE_HASH;
-    }
+    await this.refresh(true);
     clearInterval(this.timer);
     this.timer = setInterval(() => document.hidden || this.refresh().catch(() => {}), 8000);
   },
@@ -103,6 +98,13 @@ export const session = {
       this.problem = e.message;
       this.emit();
       return;
+    }
+    // Passkeys work on a network once policy-webauthn runs there: checked by
+    // its code, again at each refresh until a node shows it, since the wallet
+    // may have opened without a network.
+    if (!this.policyReady && this.net.policyWebauthn) {
+      const contract = await this.pool.contract(this.net.policyWebauthn).catch(() => null);
+      this.policyReady = contract?.code_hash === POLICY_CODE_HASH;
     }
     if (!force && this.status.tip === this.tipSeen) return;
     this.tipSeen = this.status.tip;
