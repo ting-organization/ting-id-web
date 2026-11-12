@@ -158,7 +158,10 @@ function notThisBrowser(saved) {
 }
 
 function opWords(op) {
-  if (op.kind === 'addKey' && isPhraseKey(op)) return `Add a recovery phrase (${fingerprint(op.params)})`;
+  // Only the phrase this browser made is called one: this list is where an owner spots a change they did not make.
+  if (op.kind === 'addKey' && isPhraseKey(op)) {
+    return `${hex(op.params) === session.saved()?.phraseKey ? 'Add your recovery phrase' : 'Add a phrase or phone key'} (${fingerprint(op.params)})`;
+  }
   if (op.kind === 'addKey') return `Add a ${keyKind(op).toLowerCase()} (${fingerprint(op.params)})`;
   if (op.kind === 'removeKey') return `Remove device #${op.keyId}`;
   if (op.kind === 'addGuardian') return `Link guardian ${guardianName(hex(op.guardian))}`;

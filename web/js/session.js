@@ -22,6 +22,8 @@ export const session = {
   identity: null,
   coins: [],
   activity: [],
+  /** Recoveries of this identity guardians approve now (readRecoveries). */
+  recoveries: [],
   problem: null,
   policyReady: false,
   listeners: new Set(),
@@ -47,6 +49,7 @@ export const session = {
     this.identity = null;
     this.coins = [];
     this.activity = [];
+    this.recoveries = [];
     this.tipSeen = null;
     await this.open();
   },
@@ -80,6 +83,7 @@ export const session = {
     this.identity = null;
     this.coins = [];
     this.activity = [];
+    this.recoveries = [];
   },
 
   signer() {
@@ -117,6 +121,7 @@ export const session = {
         await this.readCoins(saved);
         this.settleRuns();
         await this.scan(saved);
+        await this.readRecoveries(saved);
         await this.watchPending();
       } catch (e) {
         this.problem = e.message;
@@ -188,24 +193,9 @@ export const session = {
     await this.call(this.registry, input, BUDGETS.execute, summary, { notBefore: at + 30, tag }).catch(() => {});
   },
 
-  /**
-   * Recoveries of this identity that guardians approve now, read from its
-   * activity: each proposal's approvals and the keys it would install, for
-   * the current recovery epoch only, since a change of keys, guardians or
-   * delays voids older ones.
-   */
+  /** Recoveries of this identity that guardians approve now, as readRecoveries read them at the last block. */
   openRecoveries() {
-    const id = this.identity;
-    if (!id?.onChain || !id.core) return [];
-    const latest = new Map();
-    for (const item of this.activity) {
-      if (!item.proposal || !['id:recovery-approved', 'id:recovery-withdrawn'].includes(item.kind)) continue;
-      const seen = latest.get(item.proposal) ?? { proposal: item.proposal, approvals: item.approvals, reachedAt: item.reachedAt, keys: null };
-      seen.keys ??= item.keys ?? null;
-      latest.set(item.proposal, seen);
-    }
-    return [...latest.values()].filter((p) => p.approvals > 0 && p.keys
-      && hex(registry.proposalOf(id.id, id.core.recoveryEpoch, unhex(p.keys))) === p.proposal);
+    return this.recoveries;
   },
 
   async readCoins(saved) {
@@ -244,40 +234,88 @@ export const session = {
     return this.identity.slots.map((_, n) => hex(registry.slotAccount(this.registry, unhex(saved.id), n)));
   },
 
+  /** Where this identity's activity is kept in this browser. v3: each contract read to its own height, and the recovery proposals kept apart. */
+  scanKey(saved) {
+    return `${this.net.key}:${saved.id}:v3`;
+  },
+
   /**
    * Activity: the events of the followed coins and of the registry that touch
    * this identity, from its creation on, read forward as blocks come. Kept in
-   * this browser so that only new blocks are read each time.
+   * this browser so that only new blocks are read each time: each contract up
+   * to the height read so far, at most 20 pages of it a refresh, the rest on
+   * the next. The newest 300 items are kept for the list; every recovery
+   * proposal an approval named is kept apart, with the keys it installs, so
+   * that no number of other events can push one out (readRecoveries).
    */
   async scan(saved) {
-    // v2: recovery events keep their proposal, approvals and keys.
-    const key = `${this.net.key}:${saved.id}:v2`;
+    const key = this.scanKey(saved);
     const scans = store.get().scans ?? {};
-    const scan = scans[key] ?? { to: Math.max(0, (saved.createdHeight ?? 1) - 1), items: [] };
+    const scan = scans[key] ?? { start: Math.max(0, (saved.createdHeight ?? 1) - 1), at: {}, items: [], proposals: {} };
     const mine = new Set(this.accounts());
     const contracts = [...this.coins.map((c) => c.id), this.net.registry];
     const height = this.status.height;
-    if (scan.to < height) {
-      for (const contract of contracts) {
-        let from = scan.to + 1;
-        for (let pages = 0; pages < 20; pages++) {
-          const page = await this.pool.events(contract, from);
-          for (const block of page.items) {
-            for (const e of block.events) {
-              const item = describe(contract, unhex(e.payload_hex), mine, saved.id, this.net.registry);
-              if (item) scan.items.push({ ...item, contract, height: block.height, time: block.timestamp, tx: e.transaction });
-            }
-          }
-          if (!page.items.length || page.next > page.height || page.next > height) break;
-          from = page.next;
+    let changed = false;
+    for (const contract of contracts) {
+      let from = (scan.at[contract] ?? scan.start) + 1;
+      if (from > height) continue;
+      let reached = height;
+      for (let pages = 0; ; pages++) {
+        if (pages === 20) {
+          reached = from - 1;
+          break;
         }
+        const page = await this.pool.events(contract, from);
+        for (const block of page.items) {
+          for (const e of block.events) {
+            const item = describe(contract, unhex(e.payload_hex), mine, saved.id, this.net.registry);
+            if (!item) continue;
+            scan.items.push({ ...item, contract, height: block.height, time: block.timestamp, tx: e.transaction });
+            if (item.kind === 'id:recovery-approved') scan.proposals[item.proposal] = item.keys;
+          }
+        }
+        if (!page.items.length || page.next > page.height || page.next > height) break;
+        from = page.next;
       }
-      scan.to = height;
+      scan.at[contract] = reached;
+      changed = true;
+    }
+    if (changed) {
       scan.items.sort((a, b) => b.height - a.height);
       scan.items = scan.items.slice(0, 300);
       store.set({ scans: { ...scans, [key]: scan } });
     }
     this.activity = scan.items;
+  },
+
+  /**
+   * The recoveries of this identity that guardians approve now: of every
+   * proposal an approval named, those of the current recovery epoch (a change
+   * of keys, guardians or delays voids the others for good, and they are
+   * dropped), with their approvals and when they reached the threshold read
+   * from the proposal records, with proofs.
+   */
+  async readRecoveries(saved) {
+    const id = this.identity;
+    const key = this.scanKey(saved);
+    const scans = store.get().scans ?? {};
+    const scan = scans[key];
+    if (!id?.onChain || !scan) {
+      this.recoveries = [];
+      return;
+    }
+    const live = Object.entries(scan.proposals ?? {})
+      .filter(([proposal, keys]) => hex(registry.proposalOf(id.id, id.core.recoveryEpoch, unhex(keys))) === proposal);
+    if (live.length !== Object.keys(scan.proposals ?? {}).length) {
+      store.set({ scans: { ...scans, [key]: { ...scan, proposals: Object.fromEntries(live) } } });
+    }
+    const records = await registry.readProposals(this.pool, this.registry, id.id, live.map(([proposal]) => unhex(proposal)));
+    const need = registry.required(id.core);
+    this.recoveries = live.map(([proposal, keys], i) => {
+      const { approvals, reachedAt } = records[i];
+      const due = reachedAt > 0n && approvals >= need ? reachedAt + id.core.recoveryDelay : null;
+      return { proposal, keys, approvals, required: need, reachedAt, dueAt: due };
+    }).filter((p) => p.approvals > 0n);
   },
 
   /** A held run whose scheduled action no longer exists (it ran, or was cancelled) has nothing left to do. */

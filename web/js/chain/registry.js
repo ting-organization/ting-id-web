@@ -242,6 +242,16 @@ export async function readRecovery(pool, registry, id, keyListBytes) {
   throw new Error('The identity kept changing while it was read: try again.');
 }
 
+/** `{ approvals, reachedAt }` of each of `proposals` of `id`, read together with proofs; zeros for one never approved. */
+export async function readProposals(pool, registry, id, proposals) {
+  if (!proposals.length) return [];
+  const values = await pool.storage(proposals.map((p) => [registry, proposalKey(id, p)]));
+  return values.map((v) => {
+    const r = v ? new Reader(v) : null;
+    return { approvals: r ? r.u64() : 0n, reachedAt: r ? r.u64() : 0n };
+  });
+}
+
 /**
  * A guardian's standing on the recovery of `id`: whether `guardian` is
  * linked, the proposal it approves in the current epoch (or null), and its

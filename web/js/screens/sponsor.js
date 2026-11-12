@@ -18,7 +18,7 @@ import { createLink, readCreateLink } from '../links.js';
 import { coinMark, exactMoney, fingerprint, keyKind, netTag } from '../parts.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
-import { $, amount, duration, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
+import { $, amount, amountProblem, duration, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
 import { nextNonce } from './send.js';
 
 const checked = new Map();
@@ -45,7 +45,8 @@ async function check(text) {
     const batch = await session.pool.contract(unhex(session.net.batch)).catch(() => null);
     if (batch?.code_hash !== BATCH_CODE_HASH) throw new Error('The batch program is not on this network, so the wallet cannot pay for a creation here.');
   }
-  const fee = await autoFee(session.pool, coin.id).catch(() => 0n);
+  // A creation and its payment in one batch use more of a block than a payment alone, and pay for it.
+  const fee = await autoFee(session.pool, coin.id, exists ? 'own' : 'createAndPay').catch(() => 0n);
   return { link, creation, id, exists, coin, spending: coin.accounts[0], fee };
 }
 
@@ -84,6 +85,10 @@ export const sponsor = {
         <div class="kv"><span>Fee</span><span>${fee ? exactMoney(fee, coin) : 'None'}</span></div>
       </div>
       <div class="note warn">${icon('warn')}<div>“${esc(who)}” is only what the link says. Send to someone you know, who showed you this code themselves.</div></div>
+      ${store.contactOf(hex(registry.slotAccount(session.registry, id, 0))) ? '' : `<div class="card mt">
+        <label class="row"><span class="main"><b>Save them as a contact</b><span class="wrap">Under a name you choose: the link’s is only what it says.</span></span>
+          <input type="checkbox" data-save aria-label="Save them as a contact"></label>
+        <label class="field"><span>Their name</span><input name="name" maxlength="60" autocomplete="off" placeholder="Bob" value="${esc(link.name ?? '')}"></label></div>`}
       <button class="btn primary mt" data-send>${coinMark(coin)} ${exists ? 'Send' : 'Create and send'}</button>
       <a class="link" href="#/wallet">Decline</a>
     </section>`;
@@ -95,15 +100,25 @@ export const sponsor = {
     if (!c || !button) return;
     button.addEventListener('click', async () => {
       const { link, id, exists, coin, spending, fee } = c;
-      const units = parseAmount($('[name=amount]', view).value || '0', coin.decimals);
-      if (units === null) return toast(`Enter an amount like 12.5, with at most ${coin.decimals} decimals`);
+      const typed = $('[name=amount]', view).value || '0';
+      const units = parseAmount(typed, coin.decimals);
+      if (units === null) return toast(amountProblem(typed, coin.decimals));
       if (exists && units === 0n) return toast('Enter how much to send them');
       if (units + fee > spending.record.available) return toast(`Only ${amount(spending.record.available, coin.decimals)} ${coin.symbol} available`);
+      const saveAs = $('[data-save]', view)?.checked ? $('[name=name]', view).value.trim() : '';
+      if ($('[data-save]', view)?.checked && !saveAs) return toast('Give them a name to save them under');
+      if (saveAs && store.get().contacts.some((x) => x.name.toLowerCase() === saveAs.toLowerCase())) return toast(`You have a contact called ${saveAs} already`);
       const signer = session.signer();
       if (!signer) return toast('This browser can’t act for this identity yet');
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
       try {
+        // A block may have created it since this screen was drawn, from the newcomer's own free creation:
+        // the batch would then fail as a whole. Drawn again, the screen only sends the coins.
+        if (!exists && await session.pool.record(session.registry, registry.coreKey(id))) {
+          toast('A block has created it meanwhile: now only the coins are sent. Check, then send.');
+          return dispatchEvent(new HashChangeEvent('hashchange'));
+        }
         const to = registry.slotAccount(session.registry, id, 0);
         const nonce = nextNonce(coin.id, spending);
         const who = link.name ?? `Identity ${short(id)}`;
@@ -120,9 +135,7 @@ export const sponsor = {
           const payment = await coins.actionInput({ ...pay, within: { program: batch, commitment: prefixAfter([create]) } });
           sent = await session.call(batch, batchInput([create, { target: unhex(coin.id), input: payment }]), BUDGETS.batch, summary, noted);
         }
-        if (link.name && !store.contactOf(hex(to)) && !store.get().contacts.some((x) => x.name.toLowerCase() === link.name.toLowerCase())) {
-          store.saveContact(link.name, hex(to), hex(id));
-        }
+        if (saveAs) store.saveContact(saveAs, hex(to), hex(id));
         location.hash = `#/tx/${sent.id}`;
       } catch (err) {
         toast(problem(err));

@@ -39,11 +39,16 @@ export function knownFee(coin, kind = 'own') {
 }
 
 /**
- * What a passkey payment uses, in C, S, D, G: a coin transfer whose
- * signature policy-webauthn checks through the identity registry.
+ * What an operation uses, in C, S, D, G. `own`: a passkey payment, a coin
+ * transfer whose signature policy-webauthn checks through the identity
+ * registry. `createAndPay`: the batch that creates someone's identity and
+ * pays it (sponsor.js), measured at 15,905,942 C, 40 S, 1,283 D and 498 G
+ * for an identity of one passkey and no guardians, with room for a few more
+ * keys and guardians.
  */
 export const SHARES = {
   own: [15_500_000, 17, 800, 76],
+  createAndPay: [17_000_000, 64, 2_000, 800],
 };
 
 const shareOf = (used, limits) => Math.max(...used.map((u, i) => Number(u) / Number(limits[i] || 1)));

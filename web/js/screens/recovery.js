@@ -83,12 +83,14 @@ export const restorePhrase = {
           return;
         }
         // Anyone can list a public key in an identity of their own; a key is public only once one lists it, so the first is normally yours.
+        // Even a single match is only chosen by the user: once guardians or a new phrase have replaced this key in
+        // their identity, the one left listing it may be a stranger's.
         found.sort((a, b) => a.height - b.height);
-        out.innerHTML = `<div class="card list">${found.map((f, i) => `<button class="row" data-pick="${i}"><span class="avatar">${icon('identity')}</span>
-          <span class="main"><b>Identity ${short(f.id)}</b><span>created ${esc(when(f.time))}</span></span>${icon('chevron')}</button>`).join('')}</div>
-          ${found.length > 1 ? note('', 'More than one identity lists this phrase’s key, the earliest first. Anyone can list a key they have seen in an identity of their own, so the earliest is normally yours.') : ''}`;
+        out.innerHTML = `<p>${found.length > 1 ? 'More than one identity lists this phrase’s key, the earliest first. Choose the one whose ID you know:' : 'An identity lists this phrase’s key. Check that its ID is the one you know before you go on:'}</p>
+          <div class="card list">${found.map((f, i) => `<button class="row" data-pick="${i}"><span class="avatar">${icon('identity')}</span>
+          <span class="main"><b class="mono">Identity ${short(f.id)}</b><span>created ${esc(when(f.time))}</span></span>${icon('chevron')}</button>`).join('')}</div>
+          ${note('', 'Anyone can list a key they have seen in an identity of their own. If your guardians recovered your identity, or a new phrase replaced this one, these words no longer open it, and an identity listed here may be someone else’s.')}`;
         $$('[data-pick]', out).forEach((b) => b.addEventListener('click', () => chosen(view, found[Number(b.dataset.pick)], key)));
-        if (found.length === 1) chosen(view, found[0], key);
       } catch (err) {
         out.innerHTML = note('bad', esc(problem(err)));
         find.disabled = false;
@@ -126,33 +128,41 @@ async function chosen(view, found, key) {
     <p class="muted small">Tick only a key you lost or that was stolen. A passkey that still syncs to your other devices would stop working there too.</p>` : ''}
     ${note('', `This device makes a passkey, and your phrase proposes adding it. Like every change, it waits ${esc(duration(id.core.changeDelay))}, and any of your keys can cancel it meanwhile. Until then this browser shows your identity without acting for it.`)}
     <button class="btn primary mt" data-propose>${icon('key')} Make a passkey and propose</button>`;
+  // The passkey made here: one, however many tries sending the change takes.
+  let made = null;
   $('[data-propose]', out).addEventListener('click', async (e) => {
     const button = e.currentTarget;
     const name = $('[name=name]', out).value.trim() || 'Me';
     const removals = $$('[data-remove]', out).filter((c) => c.checked).map((c) => ({ kind: 'removeKey', keyId: BigInt(c.dataset.remove) }));
     button.disabled = true;
-    button.innerHTML = '<span class="spinner"></span> Making your passkey';
+    button.innerHTML = `<span class="spinner"></span> ${made ? 'Sending' : 'Making your passkey'}`;
     try {
-      const made = await newPasskey(name);
-      const signer = phraseSigner({ secret: key.secret, keyId: own.keyId });
-      const ops = [{ kind: 'addKey', policy: unhex(session.net.policyWebauthn), params: made.publicKey }, ...removals];
-      const input = await registry.proposeInput({
-        chain: session.chain, registry: session.registry, id: found.id, opNonce: id.core.opNonce, signer, ops,
-      });
-      // The words and their key are no longer needed: nothing keeps them.
-      $('[name=words]', view).value = '';
-      key.secret = 0n;
+      made ??= await newPasskey(name);
+      // As the identity is now: an earlier try may have gone through after all, and its nonce moved on.
+      const now = await registry.readIdentity(session.pool, session.registry, found.id) ?? id;
+      const ours = (k) => hex(k.params) === hex(made.publicKey);
+      const sentBefore = now.keys.some(ours) || now.pending.some((c) => c.ops.some((op) => op.kind === 'addKey' && ours(op)));
+      if (!sentBefore) {
+        const signer = phraseSigner({ secret: key.secret, keyId: own.keyId });
+        const ops = [{ kind: 'addKey', policy: unhex(session.net.policyWebauthn), params: made.publicKey }, ...removals];
+        const input = await registry.proposeInput({
+          chain: session.chain, registry: session.registry, id: found.id, opNonce: now.core.opNonce, signer, ops,
+        });
+        await session.call(session.registry, input, BUDGETS.execute, 'Add this browser’s passkey, with the recovery phrase');
+      }
+      // Sent: only now is the identity kept here, and the words and their key let go. Nothing keeps them.
       session.keep({
         id: hex(found.id), name, publicKey: hex(made.publicKey), credentialId: hex(made.credentialId),
         createdHeight: found.height, guardians: [], coins: [], phraseKey: hex(key.publicKey),
       });
-      await session.call(session.registry, input, BUDGETS.execute, 'Add this browser’s passkey, with the recovery phrase');
+      $('[name=words]', view).value = '';
+      key.secret = 0n;
       await session.refresh(true);
       location.hash = '#/identity';
     } catch (err) {
       toast(problem(err));
       button.disabled = false;
-      button.innerHTML = `${icon('key')} Make a passkey and propose`;
+      button.innerHTML = `${icon('key')} ${made ? 'Try again' : 'Make a passkey and propose'}`;
     }
   });
 }
@@ -230,13 +240,10 @@ export function bindRecoveringCard(view) {
 
 /** On Identity for its owner: recoveries guardians approve now, which a thief may have asked for. */
 export function recoveryWarnings() {
-  const id = session.identity;
   return session.openRecoveries().map((p) => {
     const keys = registry.decodeKeyList(unhex(p.keys));
-    const need = registry.required(id.core);
-    const reached = p.reachedAt > 0 && BigInt(p.approvals) >= need;
     return `<div class="card pad mt stack"><b class="bad-text">${icon('warn')} Guardians are approving a recovery of your identity</b>
-      <p>${p.approvals} of the ${need} approvals it needs. ${reached ? `It can run ${esc(when(p.reachedAt + Number(id.core.recoveryDelay)))}, and then these keys replace all of yours:` : 'If it gets them, after the recovery delay these keys replace all of yours:'}</p>
+      <p>${p.approvals} of the ${p.required} approvals it needs. ${p.dueAt != null ? `It can run ${esc(when(Number(p.dueAt)))}, and then these keys replace all of yours:` : 'If it gets them, after the recovery delay these keys replace all of yours:'}</p>
       <div class="card list">${keyRows(keys)}</div>
       <p class="muted">If you did not ask for this, call your guardians now and ask them to withdraw. Your own keys cannot stop a recovery; only guardians can.</p></div>`;
   }).join('');
@@ -248,7 +255,9 @@ export function recoveryWarnings() {
 export function phraseSection(id) {
   if (!session.net.policySecp256k1) return '';
   const keys = id.keys.filter(isPhraseKey);
-  const adding = id.pending.find((c) => c.ops.some((op) => op.kind === 'addKey' && isPhraseKey(op)));
+  // Only the phrase this browser made is called one: another secp256k1 key may be a Ting ID phone's.
+  const mine = session.saved()?.phraseKey;
+  const adding = mine && id.pending.find((c) => c.ops.some((op) => op.kind === 'addKey' && isPhraseKey(op) && hex(op.params) === mine));
   let body;
   if (adding) {
     body = `<div class="row"><span class="avatar">${icon('clock')}</span><span class="main"><b>A recovery phrase is being added</b>
@@ -284,7 +293,7 @@ export const recoveryPhrase = {
         <p class="lead">12 words that get you back in if you lose your passkeys. Write them on paper and keep it somewhere safe: whoever has the words can act for your identity.</p>
         ${replacing && old.length ? `<h2 class="section">The phrase it replaces</h2><div class="card list">${old.map((k) => `<label class="row"><span class="avatar">${icon('lock')}</span><span class="main">
           <b>${esc(keyKind(k))} #${k.keyId}</b><span class="mono">${fingerprint(k.params)}</span></span>
-          <input type="checkbox" data-old="${k.keyId}" ${hex(k.params) === mine || old.length === 1 ? 'checked' : ''} aria-label="Replace ${esc(keyKind(k))} #${k.keyId}"></label>`).join('')}</div>
+          <input type="checkbox" data-old="${k.keyId}" ${hex(k.params) === mine ? 'checked' : ''} aria-label="Replace ${esc(keyKind(k))} #${k.keyId}"></label>`).join('')}</div>
           <p class="muted small">A ticked key stops working once the change applies. A phone key of Ting ID is also a phrase: leave it unticked to keep that phone.</p>` : ''}
         ${note('', 'Ting ID Web shows the words once and keeps no copy. They never sign anything here but a restore.')}
         <button class="btn primary mt" data-show>${icon('lock')} Show my words</button>
@@ -433,13 +442,26 @@ export const approveRecovery = {
         button.disabled = false;
       }
     };
-    $('[data-approve]', view)?.addEventListener('click', act((a) => registry.approveInput({
-      chain: session.chain, registry: session.registry, id: a.target, guardian: session.identity.id,
-      keyListBytes: a.keyList, recoveryEpoch: a.status.core.recoveryEpoch, signer: session.signer(),
-    }), 'Approve the recovery of'));
-    $('[data-withdraw]', view)?.addEventListener('click', act((a, button) => registry.withdrawInput({
-      chain: session.chain, registry: session.registry, id: a.target, guardian: session.identity.id,
-      proposal: unhex(button.dataset.withdraw), signer: session.signer(),
-    }), 'Withdraw from the recovery of'));
+    // The standing is read again at the click, and checked: a guardian's wallet never signs an approval
+    // while the guardian supports another proposal, since the signature stays valid for anyone to submit
+    // once that approval is withdrawn.
+    $('[data-approve]', view)?.addEventListener('click', act((a) => {
+      if (a.standing.mark === 1) throw new Error('You approve this recovery already');
+      if (a.standing.mark === 2) throw new Error('You withdrew from this recovery, so you cannot approve it again');
+      if (a.standing.approving) throw new Error('You approve another recovery of them now: withdraw that one first');
+      return registry.approveInput({
+        chain: session.chain, registry: session.registry, id: a.target, guardian: session.identity.id,
+        keyListBytes: a.keyList, recoveryEpoch: a.status.core.recoveryEpoch, signer: session.signer(),
+      });
+    }, 'Approve the recovery of'));
+    $('[data-withdraw]', view)?.addEventListener('click', act((a, button) => {
+      if (!a.standing.approving || hex(a.standing.approving) !== button.dataset.withdraw) {
+        throw new Error('You no longer approve that recovery: open the code again');
+      }
+      return registry.withdrawInput({
+        chain: session.chain, registry: session.registry, id: a.target, guardian: session.identity.id,
+        proposal: unhex(button.dataset.withdraw), signer: session.signer(),
+      });
+    }, 'Withdraw from the recovery of'));
   },
 };
