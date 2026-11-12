@@ -282,7 +282,14 @@ export const session = {
             if (item.kind === 'id:recovery-approved') scan.proposals[item.proposal] = item.keys;
           }
         }
-        if (beyond || !page.items.length || page.next > page.height || page.next > height) break;
+        if (beyond || page.next > height) break;
+        if (!page.items.length || page.next > page.height) {
+          // The page ran to the tip of the node that answered, which may be another node, behind this
+          // refresh's height: only what it covered is read, never less than before, and the next refresh
+          // reads on from there.
+          reached = Math.max(from - 1, Math.min(height, page.height));
+          break;
+        }
         from = page.next;
       }
       scan.at[contract] = reached;
