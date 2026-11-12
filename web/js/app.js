@@ -21,6 +21,22 @@ const LIVE = new Set(['wallet', 'identity', 'settings']);
 /** The screens before there is an identity: the welcome, and the ways in. */
 const WAYS_IN = ['welcome', 'create', 'restore', 'restore-phrase', 'restore-guardians'];
 
+/**
+ * Whether the page runs inside another page's frame. The wallet then does
+ * nothing: the page around it could cover or frame it so that someone takes
+ * its passkey prompts for that page's own. GitHub Pages sends no header that
+ * forbids framing, and a <meta> Content Security Policy cannot, so the page
+ * refuses itself. Opened as itself, in a tab, from a link or as the
+ * installed app, it is never in a frame.
+ */
+const FRAMED = (() => {
+  try {
+    return window.top !== window.self;
+  } catch {
+    return true;
+  }
+})();
+
 function drawNav(current) {
   const nav = $('#nav');
   nav.classList.toggle('locked', !store.get().identity);
@@ -76,6 +92,7 @@ export async function show() {
 }
 
 window.addEventListener('hashchange', () => {
+  if (FRAMED) return;
   show();
   window.scrollTo(0, 0);
 });
@@ -92,9 +109,16 @@ session.onChange(() => {
   if (LIVE.has(currentName) && !document.querySelector('#view :focus')) show();
 });
 
-// index.html shows the navy band with "Reading the chain…" until the first screen is drawn.
 applyTheme();
-session.open().catch(() => {}).finally(show);
+if (FRAMED) {
+  // In a frame: no screen, no chain read, no passkey; only the way to open the wallet on its own.
+  $('#view').innerHTML = `<section class="screen plain narrow"><h1 class="page">Open Ting ID on its own</h1>
+    <div class="note warn mt">${icon('warn')}<div>This is Ting ID inside another site. Ting ID works only on its own page, where you see its address, so that no other site can lead you through its passkey prompts.</div></div>
+    <a class="btn primary mt" href="${esc(location.href)}" target="_blank" rel="noopener">Open Ting ID</a></section>`;
+} else {
+  // index.html shows the navy band with "Reading the chain…" until the first screen is drawn.
+  session.open().catch(() => {}).finally(show);
 
-// Installed, the wallet opens without a network too, and reads the chain once one is back: see sw.js.
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  // Installed, the wallet opens without a network too, and reads the chain once one is back: see sw.js.
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+}
