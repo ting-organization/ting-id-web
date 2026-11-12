@@ -17,7 +17,7 @@ import { currentCoin } from './wallet.js';
  * account's tip, paid to the miner that runs it when it falls due, and
  * reserved with it until then (Ting wiki: programs/coin, fees and tips).
  */
-const draft = { coin: null, slot: 0, to: '', amount: '', fee: null, feeAuto: true, runFee: null };
+const draft = { coin: null, slot: 0, to: '', amount: '', fee: null, feeAuto: true, runFee: null, runFeeAuto: true };
 
 /** What the payment costs beside its amount: the fee now, or a withdrawal's run fee; null while not worked out. */
 const extra = (account) => (account.delay ? draft.runFee : draft.fee);
@@ -63,7 +63,7 @@ export const send = {
     if (draft.feeAuto && !account.delay) draft.fee = knownFee(coin.id);
     if (account.delay) {
       draft.fee = 0n;
-      draft.runFee = knownFee(coin.id, 'run');
+      if (draft.runFeeAuto) draft.runFee = knownFee(coin.id, 'run');
     }
     const toId = idOf(draft.to.replace(/\s+/g, ''));
     const toName = toId ? store.nameOf(hex(toId), session.accounts()) : null;
@@ -103,9 +103,9 @@ export const send = {
         showFee();
       });
     }
-    if (account.delay && draft.runFee === null) {
+    if (account.delay && draft.runFeeAuto && draft.runFee === null) {
       autoFee(session.pool, coin.id, 'run').catch(() => 0n).then((fee) => {
-        if (draft.coin !== coin.id) return;
+        if (!draft.runFeeAuto || draft.coin !== coin.id) return;
         draft.runFee = fee;
         showFee();
       });
@@ -137,6 +137,7 @@ export const send = {
         draft.coin = coinId;
         draft.slot = Number(slot);
         draft.feeAuto = true;
+        draft.runFeeAuto = true;
         close();
         redraw();
       });
@@ -160,20 +161,29 @@ export const send = {
       });
     });
     $('[data-fee]', view).addEventListener('click', async () => {
-      if (account.delay) return toast(`A withdrawal from ${account.name} pays its fee when it runs, to the miner that runs it, and the fee is set automatically`);
+      // From a locked account the fee is the run fee: paid when the withdrawal runs, to the miner that runs it.
+      const run = Boolean(account.delay);
+      const auto = run ? draft.runFeeAuto : draft.feeAuto;
       const answer = await ask({
         title: 'Fee',
-        text: 'Automatic: what recent transactions paid for the same room in a block.',
-        fields: [{ name: 'fee', label: `Fee (${coin.symbol})`, value: draft.feeAuto ? '' : amount(draft.fee ?? 0n, coin.decimals).replace(/\u202f/g, ''), placeholder: 'Automatic', inputmode: 'decimal' }],
+        text: run
+          ? `Paid when the withdrawal runs, to the miner that runs it, and reserved with it until then. Automatic: what recent transactions paid for the room a run takes.`
+          : 'Automatic: what recent transactions paid for the same room in a block.',
+        fields: [{ name: 'fee', label: `Fee (${coin.symbol})`, value: auto ? '' : amount((run ? draft.runFee : draft.fee) ?? 0n, coin.decimals).replace(/\u202f/g, ''), placeholder: 'Automatic', inputmode: 'decimal' }],
         confirm: 'Done',
       });
       if (!answer) return;
-      if (!answer.fee.trim()) draft.feeAuto = true;
-      else {
-        const v = parseAmount(answer.fee, coin.decimals);
-        if (v === null) return toast(amountProblem(answer.fee, coin.decimals));
-        draft.fee = v;
-        draft.feeAuto = false;
+      let value = null;
+      if (answer.fee.trim()) {
+        value = parseAmount(answer.fee, coin.decimals);
+        if (value === null) return toast(amountProblem(answer.fee, coin.decimals));
+      }
+      if (run) {
+        draft.runFeeAuto = value === null;
+        draft.runFee = value;
+      } else {
+        draft.feeAuto = value === null;
+        if (value !== null) draft.fee = value;
       }
       redraw();
     });
@@ -211,7 +221,7 @@ export const review = {
     const { coin, account } = current();
     if (!coin) return send.render();
     // Opened before the automatic fee was worked out: worked out now, never taken as none.
-    if (account.delay && draft.runFee === null) draft.runFee = await autoFee(session.pool, coin.id, 'run').catch(() => 0n);
+    if (account.delay && draft.runFeeAuto && draft.runFee === null) draft.runFee = await autoFee(session.pool, coin.id, 'run').catch(() => 0n);
     if (!account.delay && draft.feeAuto && draft.fee === null) draft.fee = await autoFee(session.pool, coin.id).catch(() => 0n);
     if (problems(coin, account).length) return send.render();
     const to = hex(idOf(draft.to.replace(/\s+/g, '')));
