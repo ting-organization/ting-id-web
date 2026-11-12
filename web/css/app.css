@@ -293,7 +293,9 @@ a.row:hover, button.row:hover { background: color-mix(in srgb, var(--accent-soft
 .hero .who h1 { margin: 0 0 6px; font-size: 24px; font-weight: 600; }
 .hero .chip.good { background: color-mix(in srgb, #34d399 16%, transparent); color: #34d399; }
 .hero .chip.warn { background: color-mix(in srgb, #fbbf24 14%, transparent); color: #fcd34d; }
-.hero .idchip { margin-top: 16px; background: var(--navy-2); color: #cbd5e1; border: 0; cursor: pointer; font-family: var(--mono); }
+.hero .idrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.hero .idchip { background: var(--navy-2); color: #cbd5e1; border: 0; cursor: pointer; font-family: var(--mono); }
+.hero .idchip[data-guardian-code] { font-family: inherit; }
 .hero .idchip svg.icon { width: 15px; height: 15px; }
 .hero .split > div span:last-child { font-size: 13px; }
 .avatar.xl { width: 56px; height: 56px; font-size: 20px; }

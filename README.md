@@ -61,13 +61,14 @@ less than one signed through policy-p256 (20.5 M C).
 |---|---|
 | Wallet | Balances, Send / Receive / Scan, scheduled withdrawals with Cancel, what is waiting for a block, and activity |
 | Send | Review, then one passkey prompt. From Savings it is scheduled for when the lock ends, and the node holds the run until then |
-| Identity | Devices (passkeys and phone keys), adding one from its device link, guardians, pending changes with Cancel and Apply |
+| Identity | Devices (passkeys and phone keys), adding one from its device link, guardians (linked from their code or ID) and your own guardian code, pending changes with Cancel and Apply |
 | People | Contacts |
 | Settings | Network, nodes, coins, appearance, forgetting the identity in this browser |
 
-Links: `ting:pay`, `ting:call` (TCR-1) and `ting:device` open as
-`https://<wallet>/#ting:call?…`, so any page can hand a call to the wallet with an
-ordinary link.
+Links: `ting:pay` and `ting:call` (TCR-1) open as `https://<wallet>/#ting:call?…`,
+so any page can hand a call to the wallet with an ordinary link. A device or
+guardian link lets someone into an identity, so, as in Ting ID, it opens only when
+scanned or pasted on the Scan screen, never from an address.
 
 **It trusts no node alone.** Every balance, nonce and identity record is read with
 a Merkle proof against the state root of a header the wallet checks itself: its hash

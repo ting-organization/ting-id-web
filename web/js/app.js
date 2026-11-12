@@ -23,7 +23,8 @@ function drawNav(current) {
   nav.classList.toggle('locked', !store.get().identity);
   nav.innerHTML = '<div class="brand">Ting ID</div>' + TABS.map(([path, label, name]) => {
     const on = current === path || (path === 'wallet' && ['welcome', 'create', 'restore', 'tx', 'receive', 'scan'].includes(current))
-      || (path === 'send' && current === 'review') || (path === 'people' && current === 'person');
+      || (path === 'send' && current === 'review') || (path === 'people' && current === 'person')
+      || (path === 'identity' && ['add-guardian', 'add-device'].includes(current));
     return `<a href="#/${path}" class="${on ? 'on' : ''}" ${on ? 'aria-current="page"' : ''}><span class="pillbox">${icon(name)}</span>${esc(label)}</a>`;
   }).join('');
 }

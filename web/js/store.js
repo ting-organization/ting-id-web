@@ -65,9 +65,13 @@ export function nameOf(accountHex, own = []) {
   return contactOf(accountHex)?.name ?? null;
 }
 
-export function saveContact(name, accountHex) {
+/** A contact that is an identity, by its ID (hex). */
+export const contactOfIdentity = (idHex) => state.contacts.find((c) => c.identity === idHex) ?? null;
+
+/** Saves a name for `accountHex`; `identityHex` when the account is an identity's Spending, which keeps that too. */
+export function saveContact(name, accountHex, identityHex = contactOf(accountHex)?.identity) {
   const contacts = state.contacts.filter((c) => c.account !== accountHex);
-  contacts.push({ name: name.trim(), account: accountHex });
+  contacts.push({ name: name.trim(), account: accountHex, ...(identityHex ? { identity: identityHex } : {}) });
   contacts.sort((a, b) => a.name.localeCompare(b.name));
   set({ contacts });
 }

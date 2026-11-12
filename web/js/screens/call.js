@@ -1,7 +1,7 @@
-// Links: `ting:call` (TCR-1, a program call), `ting:pay` (a payment),
-// `ting:device` (add a device). They open from the address bar,
-// `#ting:call?…`, so that any page can hand one to this wallet with a plain
-// https link.
+// Links: `ting:call` (TCR-1, a program call) and `ting:pay` (a payment). They
+// open from the address bar, `#ting:call?…`, so that any page can hand one to
+// this wallet with a plain https link. A device, guardian or recovery link
+// never opens that way (links.js): only scanned or pasted on the Scan screen.
 import { hex, unhex } from '../../../kit/web/bytes.js';
 import * as tcr from '../../../kit/web/tcr.js';
 import { BUDGETS } from '../chain/budgets.js';
@@ -10,7 +10,7 @@ import { autoFee } from '../chain/fees.js';
 import { coinMark, exactMoney as money, notices, who } from '../parts.js';
 import { session } from '../session.js';
 import { $, amount, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
-import { device } from './identity.js';
+import { INSIDE_ONLY } from '../links.js';
 import { prefill } from './send.js';
 
 /** Reference programs: a call link never names one of these as its program. */
@@ -85,7 +85,9 @@ export const link = {
       setTimeout(() => { location.hash = '#/send'; });
       return '';
     }
-    if (kind === 'device') return device.render(text);
+    if (INSIDE_ONLY.has(kind)) {
+      return failed('This kind of link lets someone into an identity, so it never opens from another page or a message. Scan its code on the Scan screen, or paste it there.');
+    }
     if (kind === 'sign') return failed('Signing in to sites (TOCS-1) is not in Ting ID Web yet. Use Ting ID on your phone for it.');
     if (kind !== 'call') return failed('Ting ID Web does not open this kind of link.');
     let c;
@@ -118,7 +120,6 @@ export const link = {
 
   bind(view, raw) {
     const text = decodeURIComponent(raw);
-    if (/^ting:(?:\/\/)?device/i.test(text)) return device.bind(view, text);
     $('[data-approve]', view)?.addEventListener('click', async (e) => {
       const button = e.currentTarget;
       const c = pending.get(text);

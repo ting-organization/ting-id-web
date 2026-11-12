@@ -1,8 +1,9 @@
 // Scan: the camera reads a Ting QR code (a pay link, a program's call link, a
-// device link) and opens it, as Ting ID's scanner does. The browser's own
+// device link, a guardian code) and opens it, as Ting ID's scanner does. The browser's own
 // barcode reader is used where there is one; elsewhere, Safari on iPhone
 // among them, the wallet's own decoder (qr-decode.js). Nothing leaves the
 // device: frames are read in the page and dropped.
+import { hold, INSIDE_ONLY, requestOf } from '../links.js';
 import { $, ask, esc, icon, toast } from '../ui.js';
 
 let running = null;
@@ -21,11 +22,26 @@ function tingLink(text) {
   return at < 0 ? null : text.slice(at);
 }
 
+/** The screens of links that open only from inside the wallet. */
+const INSIDE = { device: '#/add-device', guardian: '#/add-guardian' };
+
+/**
+ * Opens the Ting link in `text`: true when it did, else why not, in words
+ * for a toast. A device or guardian link is held in memory for its screen,
+ * never put in the address.
+ */
 function open(text) {
   const link = tingLink(text);
-  if (!link) return false;
+  if (!link) return 'That is not a Ting link';
+  const request = requestOf(link);
+  if (request === 'recover') return 'Approving a recovery is not in Ting ID Web yet. Use Ting ID on your phone for it.';
   stopScanning();
-  location.hash = `#${link}`;
+  if (INSIDE_ONLY.has(request)) {
+    hold(link.trim());
+    location.hash = INSIDE[request];
+  } else {
+    location.hash = `#${link}`;
+  }
   return true;
 }
 
@@ -77,7 +93,8 @@ export const scan = {
     addEventListener('hashchange', stopScanning, { once: true });
     $('[data-paste]', view).addEventListener('click', async () => {
       const answer = await ask({ title: 'Paste a link', fields: [{ name: 'link', label: 'Link', placeholder: 'ting:…', multiline: true }], confirm: 'Open' });
-      if (answer && !open(answer.link.trim())) toast('That is not a Ting link');
+      const opened = answer && open(answer.link.trim());
+      if (answer && opened !== true) toast(opened);
     });
     const note = $('[data-note]', view);
     const video = $('video', view);
@@ -115,8 +132,9 @@ export const scan = {
         const text = await read(video).catch(() => null);
         if (state.stop) return;
         if (text) {
-          if (open(text)) return;
-          if (!warned) toast('That code is not a Ting link');
+          const opened = open(text);
+          if (opened === true) return;
+          if (!warned) toast(opened);
           warned = true;
         }
       }

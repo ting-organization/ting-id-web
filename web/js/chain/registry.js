@@ -45,7 +45,7 @@ export const slotAccount = (registry, id, slot) => policyAccount(registry, slotP
 const recordKey = (kind, id, index = new Uint8Array()) => H('app/id-v1/record', Uint8Array.of(kind), id, index);
 export const coreKey = (id) => recordKey(0, id);
 const keyKey = (id, epoch, keyId) => recordKey(1, id, concat(u64(epoch), u64(keyId)));
-const guardianKey = (id, guardian) => recordKey(2, id, guardian);
+export const guardianKey = (id, guardian) => recordKey(2, id, guardian);
 const slotKey = (id, slot) => recordKey(3, id, u64(slot));
 const changeKey = (id, n) => recordKey(4, id, u64(n));
 

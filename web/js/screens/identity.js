@@ -1,6 +1,7 @@
 // Identity: who you are on chain, the devices (keys) that act for you, your
 // guardians, and changes, which wait the change delay so that a stolen key
-// cannot take over at once. And the two ways in: create, or use an existing
+// cannot take over at once; the guardian code others scan to link this
+// identity as their guardian. And the two ways in: create, or use an existing
 // identity.
 import { hex, unhex } from '../../../kit/web/bytes.js';
 import { qrSvg } from '../../../kit/web/qr.js';
@@ -8,11 +9,12 @@ import { idOf } from '../../../kit/web/ting.js';
 import { sha256 } from '../../../kit/web/sha256.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as registry from '../chain/registry.js';
+import { guardianCode, guardianLink, heldLink, hold } from '../links.js';
 import * as passkey from '../passkey.js';
 import { accountBox, notices } from '../parts.js';
 import { session, slotName } from '../session.js';
 import * as store from '../store.js';
-import { $, $$, ask, copy, duration, esc, grouped, icon, initials, problem, short, toast, when } from '../ui.js';
+import { $, $$, ask, copy, duration, esc, grouped, icon, initials, openSheet, problem, short, toast, when } from '../ui.js';
 
 const KNOWN_POLICIES = () => ({
   [session.net.policyWebauthn ?? '']: 'Passkey',
@@ -26,7 +28,13 @@ const KNOWN_POLICIES = () => ({
 const fingerprint = (key) => grouped(hex(sha256(key).subarray(0, 8)));
 
 /** `ting:device?id=…&scheme=webauthn&key=…&net=…`: asks another device to add this browser’s passkey. */
-const deviceLink = (id, key) => `ting:device?id=${hex(id)}&scheme=webauthn&key=${hex(key)}&net=${session.net.chainId.slice(0, 8)}`;
+const deviceLink = (id, key) => `ting:device?id=${hex(id)}&scheme=webauthn&key=${hex(key)}&net=${netTag()}`;
+
+/** The network tag in links: the first 8 hex digits of the chain ID. */
+const netTag = () => session.net.chainId.slice(0, 8);
+
+/** What this browser calls the guardian `g` (hex): its contact's name, else its short ID. */
+const guardianName = (g) => store.contactOfIdentity(g)?.name ?? `Identity ${short(g)}`;
 
 async function propose(ops, summary) {
   const signer = session.signer();
@@ -62,9 +70,10 @@ export const identity = {
     }).join('');
     const guardians = (saved.guardians ?? []).map((g) => {
       const linked = id.guardians.some((x) => hex(x) === g);
-      const contact = store.get().contacts.find((c) => c.identity === g);
-      return `<div class="row"><span class="avatar">${icon('shield')}</span><span class="main"><b>${esc(contact?.name ?? `Identity ${short(g)}`)}</b>
-        <span>${linked ? 'Linked' : 'Not linked yet'}</span></span>
+      const linking = !linked && id.pending.find((c) => c.ops.some((op) => op.kind === 'addGuardian' && hex(op.guardian) === g));
+      const state = linked ? 'Linked' : linking ? `Linked once change #${linking.changeNo} applies` : 'Not linked';
+      return `<div class="row"><span class="avatar">${icon('shield')}</span><span class="main"><b>${esc(guardianName(g))}</b>
+        <span>${esc(state)}</span></span>
         ${linked && mine != null ? `<button class="btn small danger" data-unlink="${g}">Unlink</button>` : ''}</div>`;
     }).join('');
     const core = id.core;
@@ -73,7 +82,8 @@ export const identity = {
         <div class="top"><span class="title muted-on-navy">Identity</span></div>
         <div class="who"><span class="avatar lg xl">${esc(initials(saved.name))}</span><div><h1>${esc(saved.name)}</h1>
           <span class="chip ${id.onChain ? 'good' : 'warn'}">${icon(id.onChain ? 'shield' : 'clock')} ${id.onChain ? 'On chain' : 'Waiting for the next block'}</span></div></div>
-        <button class="chip idchip" data-copy="${hex(id.id)}">ID ${short(id.id)} ${icon('copy')}</button>
+        <div class="idrow"><button class="chip idchip" data-copy="${hex(id.id)}">ID ${short(id.id)} ${icon('copy')}</button>
+          ${id.onChain ? `<button class="chip idchip" data-guardian-code>${icon('qr')} QR code</button>` : ''}</div>
         <div class="split"><div><span>Devices</span><b>${id.keys.length}</b><span>${mine != null ? 'including this one' : 'not this browser yet'}</span></div>
           <div><span>Guardians</span><b>${core ? Number(core.guardianCount) : 0}</b><span>${core && core.guardianCount ? `${Number(core.threshold) || Math.floor(Number(core.guardianCount) / 2) + 1} needed to recover` : 'add someone you trust'}</span></div></div>
       </div>
@@ -86,7 +96,7 @@ export const identity = {
           <p class="muted small">A change waits ${esc(duration(core.changeDelay))}; until then any of your devices can cancel it.</p>` : ''}
         <h2 class="section">Guardians</h2>
         <div class="card list">${guardians || '<div class="row"><span class="main"><b>No guardians linked from here</b><span class="wrap">Guardians are people you trust. Enough of them together can give your identity new keys if you lose every device.</span></span></div>'}</div>
-        ${mine != null ? `<button class="link" data-link-guardian>${icon('shield')} Link a guardian</button>` : ''}
+        ${mine != null ? `<a class="link" href="#/add-guardian" data-link-guardian>${icon('shield')} Link a guardian</a>` : ''}
         <h2 class="section">Accounts</h2>
         <div class="card list">${id.slots.map((d, n) => `<div class="row"><span class="avatar">${icon(d ? 'lock' : 'wallet')}</span><span class="main"><b>${esc(slotName(n))}</b>
           <span>${d ? `withdrawals wait ${esc(duration(d))}` : 'instant'}</span></span></div>`).join('')}</div>
@@ -121,25 +131,11 @@ export const identity = {
     $$('[data-apply]', view).forEach((b) => b.addEventListener('click', act(() =>
       session.call(session.registry, registry.applyInput(id.id, BigInt(b.dataset.apply)), BUDGETS.execute, `Apply change #${b.dataset.apply}`))));
     $$('[data-unlink]', view).forEach((b) => b.addEventListener('click', act(async () =>
-      (await ask({ title: 'Unlink this guardian?', text: `It takes effect after ${duration(id.core.changeDelay)}; until then any of your devices can cancel it.`, confirm: 'Unlink', danger: true }))
-        && propose([{ kind: 'removeGuardian', guardian: unhex(b.dataset.unlink) }], 'Unlink a guardian'))));
-    $('[data-link-guardian]', view)?.addEventListener('click', act(async () => {
-      const answer = await ask({
-        title: 'Link a guardian',
-        text: 'A guardian is someone you know and trust. Enough of them together can give your identity new keys if you lose every device.',
-        fields: [{ name: 'id', label: 'Their identity ID', placeholder: '64 hex digits', multiline: true }],
-        confirm: 'Propose',
-      });
-      if (!answer) return null;
-      const g = idOf(answer.id.replace(/\s+/g, ''));
-      if (!g) throw new Error('An identity ID is 64 hex digits');
-      if (hex(g) === hex(id.id)) throw new Error('An identity cannot guard itself');
-      const exists = await session.pool.record(session.registry, registry.coreKey(g));
-      if (!exists) throw new Error('No identity has that ID on this network: a guardian must be an identity, not an account');
-      const saved = session.saved();
-      session.keep({ ...saved, guardians: [...new Set([...(saved.guardians ?? []), hex(g)])] });
-      return propose([{ kind: 'addGuardian', guardian: g }], `Link guardian ${short(g)}`);
-    }));
+      (await ask({ title: `Unlink ${guardianName(b.dataset.unlink)}?`, text: `They will no longer help recover your identity. It takes effect after ${duration(id.core.changeDelay)}; until then any of your devices can cancel it.`, confirm: 'Unlink', danger: true }))
+        && propose([{ kind: 'removeGuardian', guardian: unhex(b.dataset.unlink) }], `Unlink guardian ${guardianName(b.dataset.unlink)}`))));
+    // A guardian code held from an earlier scan is not the one to link now.
+    $('[data-link-guardian]', view)?.addEventListener('click', () => hold(null));
+    $('[data-guardian-code]', view)?.addEventListener('click', () => showGuardianCode());
     $('[data-new-passkey]', view)?.addEventListener('click', act(async () => {
       const saved = session.saved();
       const made = await passkey.create({ name: `${saved.name} · Ting`, handle: crypto.getRandomValues(new Uint8Array(32)) });
@@ -161,7 +157,7 @@ function notThisBrowser(saved) {
   let qr = '';
   try { qr = qrSvg(link); } catch { /* too long */ }
   return `<div class="card pad mt stack"><b>This browser can’t act for ${esc(saved.name)} yet</b>
-    <p class="muted">On a device that can, open Identity → Add a device and give it this link. This device’s key is <b class="mono">${fingerprint(unhex(saved.publicKey))}</b>: the other device shows the same before it adds it.</p>
+    <p class="muted">On a device that can, scan this with Ting ID or Ting ID Web (Scan, on the wallet), or paste the link there. This device’s key is <b class="mono">${fingerprint(unhex(saved.publicKey))}</b>: the other device shows the same before it adds it.</p>
     <div class="qr">${qr}</div>
     <div class="mono small" data-device-link>${esc(link)}</div>
     <button class="btn secondary" data-copy-device>${icon('copy')} Copy link</button></div>`;
@@ -170,45 +166,186 @@ function notThisBrowser(saved) {
 function opWords(op) {
   if (op.kind === 'addKey') return `Add a device (${fingerprint(op.params)})`;
   if (op.kind === 'removeKey') return `Remove device #${op.keyId}`;
-  if (op.kind === 'addGuardian') return `Link guardian ${short(op.guardian)}`;
-  if (op.kind === 'removeGuardian') return `Unlink guardian ${short(op.guardian)}`;
+  if (op.kind === 'addGuardian') return `Link guardian ${guardianName(hex(op.guardian))}`;
+  if (op.kind === 'removeGuardian') return `Unlink guardian ${guardianName(hex(op.guardian))}`;
   if (op.kind === 'threshold') return 'Change how many guardians recover';
   if (op.kind === 'delays') return 'Change the delays';
   if (op.kind === 'slotDelay') return `Change ${slotName(op.slot)}’s lock`;
   return 'A change';
 }
 
-/** Adding a device from its `ting:device` link: a change that waits the change delay. */
+/** The user's guardian code: scanned in Ting ID or here, it links this identity as the scanner's guardian. */
+function showGuardianCode() {
+  const saved = session.saved();
+  const link = guardianLink(netTag(), saved.id, saved.name);
+  let qr = '';
+  try { qr = qrSvg(link); } catch { /* too long: the link can still be copied */ }
+  const { dialog, close } = openSheet(`<div class="sheet-body">
+    <h2>Be a guardian</h2>
+    <p class="muted">Someone who wants you as a guardian scans this with Ting ID or Ting ID Web: Scan on the wallet, or Link a guardian on their Identity.</p>
+    <div class="qr">${qr}</div>
+    <p class="muted small center mt">If they ever lose their devices, your approval helps them get their identity back. It moves none of your coins.</p>
+    <div class="note">${icon('info')}<div>Ting ID Web cannot approve a recovery yet.</div></div>
+    <div class="sheet-actions"><button class="btn secondary" data-copy-code>${icon('copy')} Copy link</button>
+      <button class="btn primary" data-done>Done</button></div></div>`);
+  $('[data-copy-code]', dialog).addEventListener('click', () => copy(link, 'Link copied'));
+  $('[data-done]', dialog).addEventListener('click', close);
+}
+
+/** The screen of a change from a scanned or pasted link, or why it cannot be made. */
+const changeScreen = (title, body) => `<section class="screen plain narrow">
+  <a class="back" href="#/identity">${icon('back')} Identity</a>
+  <h1 class="page">${esc(title)}</h1>${body}</section>`;
+
+const refused = (title, message) => changeScreen(title, `<div class="note bad mt">${icon('warn')}<div>${esc(message)}</div></div>
+  <a class="btn secondary mt" href="#/scan">${icon('scan')} Scan a code</a>`);
+
+/**
+ * Adding a device from its `ting:device` link, scanned or pasted on the Scan
+ * screen: a change that waits the change delay.
+ */
 export const device = {
-  render(link) {
+  render() {
+    const link = heldLink('device');
+    if (!link) return refused('Add a device', 'Scan the new device’s code on the Scan screen, or paste its link there.');
     const f = Object.fromEntries(new URLSearchParams(link.slice(link.indexOf('?') + 1)));
     const id = session.identity;
     const problems = [];
     if (!id?.onChain || id.keyId == null) problems.push('This browser can’t act for an identity yet');
     else if (f.id !== hex(id.id)) problems.push('The link is for another identity');
-    if (f.net !== session.net.chainId.slice(0, 8)) problems.push('The link is for another network');
+    if (f.net !== netTag()) problems.push('The link is for another network');
     if (f.scheme !== 'webauthn' || !/^04[0-9a-f]{128}$/.test(f.key ?? '')) problems.push('Ting ID Web adds passkeys (scheme=webauthn) only');
-    if (problems.length) {
-      return `<section class="screen plain narrow"><h1 class="page">Add a device</h1>
-        <div class="note bad mt">${icon('warn')}<div>${esc(problems.join('. '))}.</div></div></section>`;
-    }
-    return `<section class="screen plain narrow"><h1 class="page">Add a device</h1>
-      <div class="card mt"><div class="kv"><span>Kind</span><span>Passkey</span></div>
+    else if (id?.keys.some((k) => hex(k.params) === f.key)) problems.push('That device can already act for this identity');
+    if (problems.length) return refused('Add a device', `${problems.join('. ')}.`);
+    return changeScreen('Add a device', `<div class="card mt"><div class="kv"><span>Kind</span><span>Passkey</span></div>
         <div class="kv"><span>Key</span><span class="mono">${fingerprint(unhex(f.key))}</span></div></div>
       <div class="note warn">${icon('warn')}<div>Check that the new device shows the same key. Only add a device you hold yourself.</div></div>
       <div class="note">${icon('clock')}<div>Takes effect in ${esc(duration(id.core.changeDelay))}; until then any of your devices can cancel it.</div></div>
-      <button class="btn primary mt" data-propose>${icon('key')} Propose</button></section>`;
+      <button class="btn primary mt" data-propose>${icon('key')} Propose</button>`);
   },
-  bind(view, link) {
+  bind(view) {
+    const link = heldLink('device');
+    const button = $('[data-propose]', view);
+    if (!link || !button) return;
     const f = Object.fromEntries(new URLSearchParams(link.slice(link.indexOf('?') + 1)));
-    $('[data-propose]', view)?.addEventListener('click', async (e) => {
-      e.currentTarget.disabled = true;
+    button.addEventListener('click', async () => {
+      button.disabled = true;
       try {
         const sent = await propose([{ kind: 'addKey', policy: unhex(session.net.policyWebauthn), params: unhex(f.key) }], 'Add a device');
+        hold(null);
         location.hash = `#/tx/${sent.id}`;
       } catch (err) {
         toast(problem(err));
-        e.currentTarget.disabled = false;
+        button.disabled = false;
+      }
+    });
+  },
+};
+
+/**
+ * Linking a guardian, as Ting ID does: from the code on their Identity
+ * (scanned here or on the wallet, or pasted), or their identity ID. The
+ * guardian must be an identity on this network, not this one, and not linked
+ * already. A name the code gives is only what its maker calls themselves; it
+ * becomes a contact, with their Spending account, unless one names them.
+ */
+export const addGuardian = {
+  render() {
+    const id = session.identity;
+    if (!id?.onChain || id.keyId == null) return refused('Link a guardian', 'This browser can’t act for this identity yet.');
+    const held = heldLink('guardian');
+    return changeScreen('Link a guardian', `<p class="lead">A guardian is someone you know and trust. Enough of them together can give your identity new keys if you lose every device.</p>
+      <div class="card pad stack">
+        <a class="btn secondary" href="#/scan">${icon('scan')} Scan their code</a>
+        <label class="field boxed"><span>Or paste their code or identity ID</span>
+          <textarea name="code" rows="3" spellcheck="false" autocomplete="off" placeholder="ting:guardian?… or 64 hex digits">${esc(held ?? '')}</textarea>
+          <span class="hint">Their code is under QR code on their Identity, in Ting ID or Ting ID Web.</span></label>
+      </div>
+      <div class="stack mt" data-found></div>
+      <div class="note">${icon('clock')}<div>Takes effect in ${esc(duration(id.core.changeDelay))}; until then any of your devices can cancel it.</div></div>
+      <button class="btn primary mt" data-propose disabled>${icon('shield')} Propose</button>`);
+  },
+
+  bind(view) {
+    const field = $('[name=code]', view);
+    const found = $('[data-found]', view);
+    const button = $('[data-propose]', view);
+    if (!field) return;
+    const me = session.identity;
+    // The guardian the field names, once checked on chain: `{ id, name }`.
+    let chosen = null;
+    let asked = 0;
+    const show = (html) => { found.innerHTML = html; };
+
+    async function check() {
+      const turn = ++asked;
+      chosen = null;
+      button.disabled = true;
+      const text = field.value.trim();
+      if (!text) return show('');
+      let code;
+      try {
+        code = guardianCode(text, netTag());
+        if (code.id === hex(me.id)) throw new Error('This is your own identity: a guardian must be someone else');
+        if (me.pending.some((c) => c.ops.some((op) => op.kind === 'addGuardian' && hex(op.guardian) === code.id))) {
+          throw new Error('A change linking them is already waiting');
+        }
+      } catch (e) {
+        return show(`<div class="note bad">${icon('warn')}<div>${esc(problem(e))}</div></div>`);
+      }
+      show(`<div class="note">${icon('clock')}<div>Looking them up…</div></div>`);
+      let exists;
+      let linked;
+      try {
+        [exists, linked] = await session.pool.storage([
+          [session.registry, registry.coreKey(unhex(code.id))],
+          [session.registry, registry.guardianKey(me.id, unhex(code.id))],
+        ]);
+      } catch (e) {
+        if (turn === asked) show(`<div class="note bad">${icon('warn')}<div>${esc(problem(e))}</div></div>`);
+        return;
+      }
+      if (turn !== asked) return;
+      if (!exists) return show(`<div class="note bad">${icon('warn')}<div>No identity has that ID on this network: a guardian must be an identity, not an account.</div></div>`);
+      if (linked) return show(`<div class="note bad">${icon('warn')}<div>${esc(guardianName(code.id))} is your guardian already.</div></div>`);
+      chosen = code;
+      const contact = store.contactOfIdentity(code.id);
+      show(`<div class="card list"><div class="row"><span class="avatar">${icon('shield')}</span><span class="main">
+          <b>${esc(contact?.name ?? code.name ?? 'An identity')}</b><span class="mono">Identity ${short(code.id)}</span></span>
+          <span class="chip good">${icon('check')} On chain</span></div></div>
+        ${contact ? '' : `<label class="field boxed"><span>Their name</span>
+          <input name="name" maxlength="60" autocomplete="off" placeholder="Bob" value="${esc(code.name ?? '')}">
+          <span class="hint">${code.name ? 'As their code calls them, which Ting ID cannot check. ' : 'Optional: '}Saved as a contact, with their Spending account.</span></label>`}`);
+      button.disabled = false;
+    }
+
+    let timer = null;
+    field.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(check, 250);
+    });
+    if (field.value.trim()) check();
+
+    button.addEventListener('click', async () => {
+      if (!chosen) return;
+      const g = chosen;
+      const name = $('[name=name]', view)?.value.trim() ?? '';
+      const spending = hex(registry.slotAccount(session.registry, unhex(g.id), 0));
+      if (name && store.get().contacts.some((c) => c.account !== spending && c.name.toLowerCase() === name.toLowerCase())) {
+        return toast(`You have a contact called ${name} already`);
+      }
+      button.disabled = true;
+      try {
+        const sent = await propose([{ kind: 'addGuardian', guardian: unhex(g.id) }], `Link guardian ${name || guardianName(g.id)}`);
+        // A guardian linked from here stays known here, by name and to unlink.
+        if (name) store.saveContact(name, spending, g.id);
+        const saved = session.saved();
+        session.keep({ ...saved, guardians: [...new Set([...(saved.guardians ?? []), g.id])] });
+        hold(null);
+        location.hash = `#/tx/${sent.id}`;
+      } catch (err) {
+        toast(problem(err));
+        button.disabled = false;
       }
     });
   },
