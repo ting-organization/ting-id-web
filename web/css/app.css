@@ -134,7 +134,7 @@ main { max-width: 640px; margin: 0 auto; overflow-wrap: anywhere; }
 @media (min-width: 960px) {
   .app { display: grid; grid-template-columns: 248px 1fr; padding: 0; }
   .nav {
-    position: sticky; top: 0; inset: auto; height: 100vh;
+    position: sticky; inset: auto; top: 0; height: 100vh; height: 100dvh;
     flex-direction: column; justify-content: flex-start; gap: 4px;
     padding: 28px 16px; border-top: 0; border-right: 1px solid var(--line);
   }
