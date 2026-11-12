@@ -158,9 +158,16 @@ const STATES = {
   failed: 'Not done',
 };
 
-/** What this browser sent that is not settled yet. */
+/**
+ * A transaction handed to the node to hold until its time, such as the run of
+ * a withdrawal from Savings: its Scheduled row, or the change it applies on
+ * Identity, shows it until then.
+ */
+const heldForLater = (p) => p.notBefore && ['pending', 'deferred'].includes(p.state) && p.notBefore > Date.now() / 1000;
+
+/** What this browser sent that is not settled yet, leaving out what the node holds for later. */
 export function waitingList() {
-  const items = session.pending().filter((p) => !['done', 'dismissed'].includes(p.state));
+  const items = session.pending().filter((p) => !['done', 'dismissed'].includes(p.state) && !heldForLater(p));
   if (!items.length) return '';
   const rows = items.map((p) => `<div class="row"><span class="avatar">${p.state === 'failed' ? icon('warn') : '<span class="spinner"></span>'}</span>
     <a class="main" href="#/tx/${p.id}"><b>${esc(p.summary)}</b><span>${esc(STATES[p.state] ?? p.state)}${p.reason ? ` · ${esc(p.reason)}` : ''} · sent ${esc(when(Math.floor(p.at / 1000)))}</span></a>
