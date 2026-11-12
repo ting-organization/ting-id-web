@@ -266,7 +266,15 @@ export const session = {
           break;
         }
         const page = await this.pool.events(contract, from);
+        // Each block is read once, up to the height this refresh read the identity at: a node's page may run
+        // further, and what lies beyond waits for the next refresh. So no event shows twice, and no approval
+        // is checked against a recovery epoch older than its own.
+        let beyond = false;
         for (const block of page.items) {
+          if (block.height > height) {
+            beyond = true;
+            break;
+          }
           for (const e of block.events) {
             const item = describe(contract, unhex(e.payload_hex), mine, saved.id, this.net.registry);
             if (!item) continue;
@@ -274,7 +282,7 @@ export const session = {
             if (item.kind === 'id:recovery-approved') scan.proposals[item.proposal] = item.keys;
           }
         }
-        if (!page.items.length || page.next > page.height || page.next > height) break;
+        if (beyond || !page.items.length || page.next > page.height || page.next > height) break;
         from = page.next;
       }
       scan.at[contract] = reached;
@@ -283,7 +291,10 @@ export const session = {
     if (changed) {
       scan.items.sort((a, b) => b.height - a.height);
       scan.items = scan.items.slice(0, 300);
-      store.set({ scans: { ...scans, [key]: scan } });
+      // This identity's activity kept under an earlier format is read no more: dropped, so it does not pile up.
+      const prefix = `${this.net.key}:${saved.id}`;
+      const kept = Object.fromEntries(Object.entries(scans).filter(([k]) => k !== prefix && !k.startsWith(`${prefix}:`)));
+      store.set({ scans: { ...kept, [key]: scan } });
     }
     this.activity = scan.items;
   },
