@@ -5,6 +5,9 @@
 /** The CodeHash of policy-webauthn, built reproducibly by build.sh from program/. */
 export const POLICY_CODE_HASH = '91a7b9705abf0ee97947d45f7914cea689034c464e1da9186c0b06ddfb769fea';
 
+/** The CodeHash of the reference batch program: a payment is bound to a batch only when it runs this code. */
+export const BATCH_CODE_HASH = '68118bab6c4f9c9a88147a25cbc2327a89b50ea997633e26bfe84e9563438a6e';
+
 export const PRODUCTION = {
   key: 'production',
   name: 'Ting',
@@ -16,6 +19,10 @@ export const PRODUCTION = {
   // reference programs' budget). The wallet uses it only when the contract
   // there runs POLICY_CODE_HASH.
   policyWebauthn: 'cfd585a5d39f59ae50a19a33e972c4daaa18fae0cf989ca00a999ca4bc94619c',
+  /** The reference secp256k1 policy: a recovery phrase's key, and a Ting ID phone's, is a key of it. */
+  policySecp256k1: '9558a75642eb797de5ec1be056f01c62d99c492c8f7ec6efed460767588987c9',
+  /** The reference P-256 policy, for P-256 keys of other wallets. */
+  policyP256: '35d2b107de4b2a738a8190be18ccfd35d9bac45da094cfa4281a3a4b178852b3',
   coins: ['305378d17f6af84a563d0f8a8455084948aff7330b62b4f2f98a44b82ba113c4'],
   /** The easiest target the production chain allows: a header must not claim an easier one. */
   powLimit: '0000000fffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
@@ -29,6 +36,8 @@ export const DEVELOPMENT = {
   registry: '6b7c6151f4ae6b08c7063e00db5ec0bf9607412a2e11cea536b8d07d58f44334',
   batch: '84df96921d80b9ba85465fe90c004f4c9eb94859d34f743d71e6ab21a75e704d',
   policyWebauthn: 'e76b949606cda5fcd9395733957f33538cde2be059b0fbfd88c6e14371c305af',
+  policySecp256k1: '19efef33a81067da9465c698f884dbe9049088d5fdb60770e1af3edf2294782a',
+  policyP256: '34ddc75c0463fd2d1542127fbf0fe92ba41bd4fbfba4e473d3aa941e74ab3b5e',
   coins: [],
   powLimit: null,
 };
@@ -50,7 +59,10 @@ export async function networks() {
           ...DEVELOPMENT,
           nodes: [dev.node ?? DEVELOPMENT.nodes[0]],
           registry: dev.registry ?? DEVELOPMENT.registry,
+          batch: dev.batch ?? DEVELOPMENT.batch,
           policyWebauthn: dev.policyWebauthn ?? DEVELOPMENT.policyWebauthn,
+          policySecp256k1: dev.policySecp256k1 ?? DEVELOPMENT.policySecp256k1,
+          policyP256: dev.policyP256 ?? DEVELOPMENT.policyP256,
           coins: dev.coins ?? [],
         });
       }

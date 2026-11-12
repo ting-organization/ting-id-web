@@ -59,16 +59,25 @@ less than one signed through policy-p256 (20.5 M C).
 
 | Tab | |
 |---|---|
-| Wallet | Balances, Send / Receive / Scan, scheduled withdrawals with Cancel, what is waiting for a block, and activity |
+| Wallet | Balances, Send / Receive / Scan, scheduled withdrawals with Cancel, what is waiting for a block, and activity. A new identity without coins shows its create link, *Get your first coins* |
 | Send | Review, then one passkey prompt. From Savings it is scheduled for when the lock ends, and the node holds the run until then |
-| Identity | Devices (passkeys and phone keys), adding one from its device link, guardians (linked from their code or ID) and your own guardian code, pending changes with Cancel and Apply |
+| Identity | Devices (passkeys, phrase and phone keys), adding one from its device link, guardians (linked from their code or ID) and your own guardian code, your recovery phrase, recoveries your guardians approve, pending changes with Cancel and Apply |
 | People | Contacts |
 | Settings | Network, nodes, coins, appearance, forgetting the identity in this browser |
 
-Links: `ting:pay` and `ting:call` (TCR-1) open as `https://<wallet>/#ting:call?…`,
-so any page can hand a call to the wallet with an ordinary link. A device or
-guardian link lets someone into an identity, so, as in Ting ID, it opens only when
-scanned or pasted on the Scan screen, never from an address.
+Links: `ting:pay`, `ting:call` (TCR-1) and `ting:create` open as
+`https://<wallet>/#ting:call?…`, so any page can hand one to the wallet with an
+ordinary link. A device, guardian or recover link lets someone into an identity,
+so, as in Ting ID, it opens only when scanned or pasted on the Scan screen, never
+from an address. Every link is written as in Ting ID's `LINKS.md`, so the two
+wallets read each other's.
+
+**Getting someone started.** An identity made here can be created without a fee,
+which a block takes while it has room. Its wallet shows its `create` link as a QR
+code. Whoever opens it, in Ting ID or here, sees the identity's keys and delays and
+sends it coins to start with; while no block has the identity yet, the same
+transaction creates it: a batch of the creation and a payment bound to it, whose
+fee pays for both.
 
 **It trusts no node alone.** Every balance, nonce and identity record is read with
 a Merkle proof against the state root of a header the wallet checks itself: its hash
@@ -76,9 +85,41 @@ is the tip, its proof of work holds, its chain is ours. With two or more nodes i
 waits until another node has the same block. Events and transaction lookups, which
 carry no proofs, are used only for history and progress.
 
-Not here yet: signing in to sites (TOCS-1), recovering someone as their guardian,
-coin tools, and paying fees for identity changes through a batch (they go unpaid,
-as they do from Ting ID when no fee is set).
+Not here yet: signing in to sites (TOCS-1), coin tools, and paying fees for
+identity changes through a batch (they go unpaid, as they do from Ting ID when no
+fee is set).
+
+## Getting back in
+
+*Use an existing identity* offers four ways:
+
+| Way | | This device can act |
+|---|---|---|
+| With a passkey | One made for Ting ID Web, synced here or on a security key. The wallet asks for a signature and finds the identity that lists the key | At once |
+| With your recovery phrase | The 12 words find the identity, this device makes a passkey, and the phrase signs one change: add it, and remove any keys you tick as lost | Once the change applies, after the change delay (7 days) |
+| From another device | This device makes a passkey and shows a `device` code; a device that can act for the identity scans it and proposes adding it | Once that change applies |
+| With your guardians | This device makes a passkey and shows a `recover` code; each guardian scans it and approves | The recovery delay (2 days) after enough guardians approve |
+
+The wallet hands every change and recovery it waits for to the node as a deferred
+transaction, timed for when it is due, so it applies even with the wallet closed.
+
+**The recovery phrase** is made exactly as Ting ID makes one
+([`RECOVERY.md`](https://github.com/ting-organization/ting-id/blob/main/RECOVERY.md)):
+BIP-39 words, and the BIP-32 key at `m/44'/1414090311'/0'/0/0`, a key of the
+reference secp256k1 policy. It is added from Identity after the identity exists,
+as a change that waits the change delay; *Make a new recovery phrase* replaces it
+the same way. The words are shown once and typed back three at a time; the wallet
+keeps neither them nor their key, and uses them for nothing but a restore. On the
+chain the phrase's key is a key like any other, though: whoever finds the words can
+act for the identity with other software, Ting ID on Android among them. Savings
+and changes still wait, and your passkey cancels them.
+
+**Guardians** replace all of an identity's keys with a new key list. The
+`recover` code lists this device's new passkey alone, so a recovery also retires
+the old passkeys and the old phrase; a new phrase is added afterwards. As a
+guardian, you scan someone's code, compare the key it installs with the one they
+read to you, and approve or withdraw with your passkey. The owner's Identity tab
+warns while guardians approve a recovery of it: only guardians can stop one.
 
 ## Installing
 
@@ -108,10 +149,16 @@ or newer, Python 3, and `ting` on your PATH.
 cargo test --release                         # 36 tests of the policy on Ting's reference VM
 node kit/scripts/devchain.mjs start          # a development chain in dev/, mining
 node kit/scripts/devchain.mjs setup          # the reference programs and a test coin
-node scripts/dev.mjs                         # deploys the policy, writes web/dev-chain.json
+node scripts/dev.mjs                         # the policy, policy-secp256k1 and batch; writes web/dev-chain.json
 python3 kit/scripts/serve.py 8766            # http://127.0.0.1:8766/web/
 node kit/scripts/devchain.mjs fund <account> 10
+node scripts/test-phrase.mjs                 # recovery phrases against BIP-39, BIP-32, RFC 6979 and OpenSSL
 ```
+
+`reference/` holds the two reference programs the kit does not deploy,
+`policy-secp256k1.wasm` and `batch.wasm`, byte for byte as the Ting repository's
+`programs/` has them; `scripts/dev.mjs` checks their CodeHashes before it deploys
+them.
 
 Passkeys need https or `localhost`. On this computer, open
 <http://localhost:8766/web/> and your browser's own passkeys work. For automated
@@ -135,9 +182,10 @@ GitHub Actions), it publishes there, at `wallet.ting-project.com`.
 
 ## Safety
 
-The key never reaches the page; what the page asks it to sign is another matter. A
-passkey's prompt names the site, not the operation, so whoever can change the page
-can ask for a different signature. Keep the wallet on a domain of its own, with
+The passkey's key never reaches the page; what the page asks it to sign is another
+matter. A passkey's prompt names the site, not the operation, so whoever can change
+the page can ask for a different signature. A recovery phrase does reach the page,
+when it is made and when it restores: a changed page could keep the words. Keep the wallet on a domain of its own, with
 nothing else on it; keep the domain and the account that hosts it locked down; and
 treat a passkey as a key for everyday amounts, with Savings and other devices as
 the safety net. A passkey that syncs through iCloud Keychain or Google Password

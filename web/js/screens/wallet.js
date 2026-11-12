@@ -6,6 +6,7 @@ import { activityList, coinMark, notices, scheduledList, waitingList } from '../
 import { session } from '../session.js';
 import * as store from '../store.js';
 import { $$, esc, fractionHtml, icon, initials, problem, shortAmount, toast } from '../ui.js';
+import { firstCoins } from './sponsor.js';
 
 export function currentCoin() {
   const want = store.get().coin;
@@ -50,7 +51,7 @@ export const wallet = {
     return `<section class="wallet">
       <div class="columns">
         <div class="lead-col">${hero()}
-          <div class="screen stack mt">${notices()}${devHint()}</div>
+          <div class="screen stack mt">${notices()}${firstCoins()}${devHint()}</div>
           <div class="screen">${scheduledList()}${waitingList()}</div>
         </div>
         <div class="side screen"><h2 class="section">Activity</h2>${activityList()}</div>

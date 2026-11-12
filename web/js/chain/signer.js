@@ -5,6 +5,7 @@
 import { concat, framed, u64, unhex } from '../../../kit/web/bytes.js';
 import { H, policyAccount } from '../../../kit/web/ting.js';
 import * as passkey from '../passkey.js';
+import * as phrase from '../phrase.js';
 import { slotParams } from './registry.js';
 
 /** The passkey's witness for `message`, after the user approves. */
@@ -30,4 +31,14 @@ export function identitySigner({ registry, id, keyId, credentialId }) {
       return { policy: registry, params, account: policyAccount(registry, params), witness: auth };
     },
   };
+}
+
+/**
+ * A recovery phrase's key, key `keyId` of an identity, as a signer of one
+ * registry operation: its witness is `r ‖ s` over Ting's signing digest, as
+ * policy-secp256k1 reads it. The wallet makes one only while a restore signs
+ * its change, and never for an account: the phrase moves no coins here.
+ */
+export function phraseSigner({ secret, keyId }) {
+  return { keyId, sign: (message) => phrase.sign(secret, H('app/sign-v1', message)) };
 }

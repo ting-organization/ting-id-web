@@ -1,5 +1,6 @@
 // Scan: the camera reads a Ting QR code (a pay link, a program's call link, a
-// device link, a guardian code) and opens it, as Ting ID's scanner does. The browser's own
+// create link, a device link, a guardian code, a recover code) and opens it,
+// as Ting ID's scanner does. The browser's own
 // barcode reader is used where there is one; elsewhere, Safari on iPhone
 // among them, the wallet's own decoder (qr-decode.js). Nothing leaves the
 // device: frames are read in the page and dropped.
@@ -23,18 +24,17 @@ function tingLink(text) {
 }
 
 /** The screens of links that open only from inside the wallet. */
-const INSIDE = { device: '#/add-device', guardian: '#/add-guardian' };
+const INSIDE = { device: '#/add-device', guardian: '#/add-guardian', recover: '#/approve-recovery' };
 
 /**
  * Opens the Ting link in `text`: true when it did, else why not, in words
- * for a toast. A device or guardian link is held in memory for its screen,
- * never put in the address.
+ * for a toast. A device, guardian or recover link is held in memory for its
+ * screen, never put in the address.
  */
 function open(text) {
   const link = tingLink(text);
   if (!link) return 'That is not a Ting link';
   const request = requestOf(link);
-  if (request === 'recover') return 'Approving a recovery is not in Ting ID Web yet. Use Ting ID on your phone for it.';
   stopScanning();
   if (INSIDE_ONLY.has(request)) {
     hold(link.trim());

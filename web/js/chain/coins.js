@@ -49,10 +49,18 @@ export const signedExpiry = () => BigInt((Math.floor(Date.now() / 86_400_000) + 
 
 /**
  * A coin action of an identity's slot, signed by its passkey: `10 ‖ 00 ‖
- * policy ‖ Bytes(params) ‖ u64 nonce ‖ Bytes(witness) ‖ action`.
+ * policy ‖ Bytes(params) ‖ u64 nonce ‖ Bytes(witness) ‖ action`. `within`
+ * binds it: `{ program, commitment }` makes it valid only as a call by that
+ * program while it vouches for that commitment (a batch: the calls before it).
  */
-export async function actionInput({ chain, coin, signer, nonce, effect, fee = 0n, tip = 0n, notBefore = 0n, validUntil = signedExpiry() }) {
-  const action = new Writer().put(effect).u128(fee).u128(tip).u64(notBefore).u64(validUntil).u8(0).finish();
+export async function actionInput({ chain, coin, signer, nonce, effect, fee = 0n, tip = 0n, notBefore = 0n, validUntil = signedExpiry(), within = null }) {
+  const action = new Writer().put(effect).u128(fee).u128(tip).u64(notBefore).u64(validUntil);
+  if (within) action.u8(1).put(within.program).put(within.commitment);
+  else action.u8(0);
+  return signedAction({ chain, coin, signer, nonce, action: action.finish() });
+}
+
+async function signedAction({ chain, coin, signer, nonce, action }) {
   const message = new Writer().bytes(utf8('app/coin-v1')).put(chain).put(coin).put(signer.account)
     .u8(0x10).u64(nonce).put(action).finish();
   const witness = await signer.witness(message);

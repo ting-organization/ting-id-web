@@ -18,13 +18,16 @@ const TABS = [
 /** Screens that follow the chain: drawn again when a new block changes what they show. */
 const LIVE = new Set(['wallet', 'identity', 'settings']);
 
+/** The screens before there is an identity: the welcome, and the ways in. */
+const WAYS_IN = ['welcome', 'create', 'restore', 'restore-phrase', 'restore-guardians'];
+
 function drawNav(current) {
   const nav = $('#nav');
   nav.classList.toggle('locked', !store.get().identity);
   nav.innerHTML = '<div class="brand">Ting ID</div>' + TABS.map(([path, label, name]) => {
-    const on = current === path || (path === 'wallet' && ['welcome', 'create', 'restore', 'tx', 'receive', 'scan'].includes(current))
+    const on = current === path || (path === 'wallet' && [...WAYS_IN, 'tx', 'receive', 'scan', 'approve-recovery'].includes(current))
       || (path === 'send' && current === 'review') || (path === 'people' && current === 'person')
-      || (path === 'identity' && ['add-guardian', 'add-device'].includes(current));
+      || (path === 'identity' && ['add-guardian', 'add-device', 'recovery-phrase'].includes(current));
     return `<a href="#/${path}" class="${on ? 'on' : ''}" ${on ? 'aria-current="page"' : ''}><span class="pillbox">${icon(name)}</span>${esc(label)}</a>`;
   }).join('');
 }
@@ -43,8 +46,8 @@ let currentName = null;
 export async function show() {
   let { name, args } = parse();
   const hasIdentity = Boolean(store.get().identity && session.saved());
-  if (!hasIdentity && !['welcome', 'create', 'restore', 'settings', 'link', 'people', 'person'].includes(name)) name = 'welcome';
-  if (hasIdentity && ['welcome', 'create', 'restore'].includes(name)) name = 'wallet';
+  if (!hasIdentity && ![...WAYS_IN, 'settings', 'link', 'people', 'person'].includes(name)) name = 'welcome';
+  if (hasIdentity && WAYS_IN.includes(name)) name = 'wallet';
   const screen = screens[name] ?? screens.wallet;
   const token = (current = {});
   currentName = name;

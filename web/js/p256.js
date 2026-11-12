@@ -78,8 +78,11 @@ const encode = ([x, y]) => {
 function decode(key) {
   if (key.length !== 65 || key[0] !== 4) return null;
   const x = toBig(key.subarray(1, 33)), y = toBig(key.subarray(33));
-  return mod(y * y - (x * x * x + A * x + B)) === 0n ? [x, y] : null;
+  return x < P && y < P && mod(y * y - (x * x * x + A * x + B)) === 0n ? [x, y] : null;
 }
+
+/** Whether `key` is a P-256 public key: 65 bytes, uncompressed, a point on the curve. */
+export const onCurve = (key) => decode(key) !== null;
 
 /**
  * The public keys, 65 bytes uncompressed, that could have made the signature

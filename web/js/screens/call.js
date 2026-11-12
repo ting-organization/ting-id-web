@@ -1,7 +1,9 @@
-// Links: `ting:call` (TCR-1, a program call) and `ting:pay` (a payment). They
-// open from the address bar, `#ting:call?…`, so that any page can hand one to
-// this wallet with a plain https link. A device, guardian or recovery link
-// never opens that way (links.js): only scanned or pasted on the Scan screen.
+// Links: `ting:call` (TCR-1, a program call), `ting:pay` (a payment) and
+// `ting:create` (someone's new identity, to send its first coins: sponsor.js).
+// They open from the address bar, `#ting:call?…`, so that any page can hand
+// one to this wallet with a plain https link. A device, guardian or recovery
+// link never opens that way (links.js): only scanned or pasted on the Scan
+// screen.
 import { hex, unhex } from '../../../kit/web/bytes.js';
 import * as tcr from '../../../kit/web/tcr.js';
 import { BUDGETS } from '../chain/budgets.js';
@@ -12,6 +14,7 @@ import { session } from '../session.js';
 import { $, amount, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
 import { INSIDE_ONLY } from '../links.js';
 import { prefill } from './send.js';
+import { sponsor } from './sponsor.js';
 
 /** Reference programs: a call link never names one of these as its program. */
 const REFERENCE_CODES = new Set([
@@ -85,6 +88,7 @@ export const link = {
       setTimeout(() => { location.hash = '#/send'; });
       return '';
     }
+    if (kind === 'create') return sponsor.render(text);
     if (INSIDE_ONLY.has(kind)) {
       return failed('This kind of link lets someone into an identity, so it never opens from another page or a message. Scan its code on the Scan screen, or paste it there.');
     }
@@ -120,6 +124,7 @@ export const link = {
 
   bind(view, raw) {
     const text = decodeURIComponent(raw);
+    if (/^ting:(?:\/\/)?create/i.test(text)) return sponsor.bind(view, text);
     $('[data-approve]', view)?.addEventListener('click', async (e) => {
       const button = e.currentTarget;
       const c = pending.get(text);

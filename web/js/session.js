@@ -113,6 +113,7 @@ export const session = {
     if (saved) {
       try {
         await this.readIdentity(saved);
+        await this.follow(saved);
         await this.readCoins(saved);
         this.settleRuns();
         await this.scan(saved);
@@ -145,6 +146,66 @@ export const session = {
     const mine = saved.publicKey && found.keys.find((k) =>
       this.net.policyWebauthn && hex(k.policy) === this.net.policyWebauthn && hex(k.params) === saved.publicKey);
     this.identity = { ...found, onChain: true, keyId: mine ? mine.keyId : null };
+  },
+
+  /** The key list of a recovery to this browser's passkey alone. */
+  recoveryKeys(saved = this.saved()) {
+    return registry.keyList([{ policy: unhex(this.net.policyWebauthn), params: unhex(saved.publicKey) }]);
+  },
+
+  /**
+   * What this browser waits for before it can act: a pending change adding
+   * its passkey, handed to the node to apply when due; or, while guardians
+   * recover the identity to its passkey, that recovery, read each block and
+   * handed to the node to run once approved and due.
+   */
+  async follow(saved) {
+    const id = this.identity;
+    this.recovery = null;
+    if (!saved.publicKey || !id?.onChain) return;
+    if (id.keyId != null) {
+      if (saved.recovering) this.keep({ ...saved, recovering: undefined });
+      return;
+    }
+    const change = id.pending.find((c) => c.ops.some((op) => op.kind === 'addKey' && hex(op.params) === saved.publicKey));
+    if (change) {
+      await this.hand(`${saved.id}:apply:${change.changeNo}`, registry.applyInput(id.id, change.changeNo),
+        Number(change.effectiveAt), 'Add this browser’s passkey');
+    }
+    if (saved.recovering) {
+      const keys = this.recoveryKeys(saved);
+      this.recovery = await registry.readRecovery(this.pool, this.registry, id.id, keys);
+      if (this.recovery?.dueAt != null) {
+        await this.hand(`${saved.id}:recover:${hex(this.recovery.proposal)}`, registry.recoverInput(id.id, keys),
+          Number(this.recovery.dueAt), 'Recovery to this browser’s passkey');
+      }
+    }
+  },
+
+  /** Hands an unsigned registry call to the node to hold until `at`, block time: once for each `tag`. */
+  async hand(tag, input, at, summary) {
+    if ((store.get().pending ?? []).some((p) => p.tag === tag)) return;
+    await this.call(this.registry, input, BUDGETS.execute, summary, { notBefore: at + 30, tag }).catch(() => {});
+  },
+
+  /**
+   * Recoveries of this identity that guardians approve now, read from its
+   * activity: each proposal's approvals and the keys it would install, for
+   * the current recovery epoch only, since a change of keys, guardians or
+   * delays voids older ones.
+   */
+  openRecoveries() {
+    const id = this.identity;
+    if (!id?.onChain || !id.core) return [];
+    const latest = new Map();
+    for (const item of this.activity) {
+      if (!item.proposal || !['id:recovery-approved', 'id:recovery-withdrawn'].includes(item.kind)) continue;
+      const seen = latest.get(item.proposal) ?? { proposal: item.proposal, approvals: item.approvals, reachedAt: item.reachedAt, keys: null };
+      seen.keys ??= item.keys ?? null;
+      latest.set(item.proposal, seen);
+    }
+    return [...latest.values()].filter((p) => p.approvals > 0 && p.keys
+      && hex(registry.proposalOf(id.id, id.core.recoveryEpoch, unhex(p.keys))) === p.proposal);
   },
 
   async readCoins(saved) {
@@ -189,7 +250,8 @@ export const session = {
    * this browser so that only new blocks are read each time.
    */
   async scan(saved) {
-    const key = `${this.net.key}:${saved.id}`;
+    // v2: recovery events keep their proposal, approvals and keys.
+    const key = `${this.net.key}:${saved.id}:v2`;
     const scans = store.get().scans ?? {};
     const scan = scans[key] ?? { to: Math.max(0, (saved.createdHeight ?? 1) - 1), items: [] };
     const mine = new Set(this.accounts());
@@ -245,6 +307,16 @@ export const session = {
     const item = { id, summary, at: Date.now(), network: this.net.key, hex: hex(tx), state: 'pending', ...extra };
     store.set({ pending: [...(store.get().pending ?? []), item] });
     return item;
+  },
+
+  /** Proposes `ops` as one change of this identity, signed by this browser's passkey. */
+  async propose(ops, summary) {
+    const signer = this.signer();
+    if (!signer) throw new Error('This browser can’t act for this identity yet');
+    const input = await registry.proposeInput({
+      chain: this.chain, registry: this.registry, id: this.identity.id, opNonce: this.identity.core.opNonce, signer, ops,
+    });
+    return this.call(this.registry, input, BUDGETS.execute, summary);
   },
 
   /** Sends a call to `target` with `input` and the budget its kind needs. */
@@ -314,6 +386,13 @@ function describe(contract, payload, mine, idHex, registryHex) {
       if (name === 'change-proposed') {
         item.effectiveAt = Number(r.u64());
         item.ops = registry.decodeChange(r).map(opText);
+      }
+      if (name === 'recovery-approved' || name === 'recovery-withdrawn') {
+        item.proposal = hex(r.id());
+        item.guardian = hex(r.id());
+        item.approvals = Number(r.u64());
+        item.reachedAt = Number(r.u64());
+        if (name === 'recovery-approved') item.keys = hex(r.take(r.data.length - r.at));
       }
       return item;
     }

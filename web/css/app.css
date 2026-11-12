@@ -310,7 +310,16 @@ a.row:hover, button.row:hover { background: color-mix(in srgb, var(--accent-soft
 .chip.bad { background: var(--red-soft); color: var(--red); }
 .note.warn { background: var(--amber-soft); color: var(--amber); }
 .note.bad { background: var(--red-soft); color: var(--red); }
+.note.good { background: var(--green-soft); color: var(--green); }
 .note a { color: inherit; text-decoration: underline; }
+.field .hint.bad, .bad-text { color: var(--red); }
+.bad-text { display: flex; align-items: center; gap: 8px; }
+label.row { cursor: pointer; }
+label.row input[type="checkbox"] { width: 22px; height: 22px; flex: none; accent-color: var(--accent); }
+/* A recovery phrase: numbered words in two columns, read in order down each. */
+.words { list-style: none; counter-reset: word; columns: 2; column-gap: 12px; margin: 0; padding: 18px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); }
+.words li { counter-increment: word; break-inside: avoid; padding: 8px 4px; font-family: var(--mono); font-size: 16px; }
+.words li::before { content: counter(word); display: inline-block; width: 2.2em; color: var(--faint); font-size: 13px; text-align: right; margin-right: 10px; }
 .says { font-size: 18px; line-height: 1.5; margin: 6px 0 0; overflow-wrap: anywhere; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); flex: none; }
 .dot.good { background: var(--green); }
