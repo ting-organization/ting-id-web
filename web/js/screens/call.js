@@ -84,6 +84,8 @@ export const link = {
     if (kind === 'pay') {
       const f = Object.fromEntries(new URLSearchParams(text.slice(text.indexOf('?') + 1)));
       if (f.net && f.net !== session.net.chainId.slice(0, 8)) return failed('This pay link is for another network.');
+      // A link writes its amount with a dot, `12.5` (LINKS.md); `1,5` or `1,000` could mean two things.
+      if (f.amount && !/^\d+(\.\d+)?$/.test(f.amount)) return failed('This pay link’s amount is not written as links write one, like 12.5.');
       prefill({ to: f.to, coin: f.coin, amount: f.amount });
       setTimeout(() => { location.hash = '#/send'; });
       return '';

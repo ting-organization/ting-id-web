@@ -8,7 +8,7 @@ import { autoFee, knownFee } from '../chain/fees.js';
 import { accountBox, coinMark, exactMoney, money, notices, who } from '../parts.js';
 import { reasonOf, session } from '../session.js';
 import * as store from '../store.js';
-import { $, $$, amount, ask, copy, duration, esc, fractionHtml, grouped, icon, initials, openSheet, parseAmount, problem, short, shortAmount, toast, when } from '../ui.js';
+import { $, $$, amount, amountProblem, ask, copy, duration, esc, fractionHtml, grouped, icon, initials, linkAmount, openSheet, parseAmount, problem, short, shortAmount, toast, when } from '../ui.js';
 import { currentCoin } from './wallet.js';
 
 /** The payment being written: it survives a trip to Review and back. */
@@ -37,7 +37,7 @@ function problems(coin, account) {
   else if (session.identity && hex(to) === hex(session.identity.id)) out.push('That is your identity’s ID, not an account: send to an account');
   const units = parseAmount(draft.amount, coin.decimals);
   if (!draft.amount.trim()) out.push('Enter an amount like 12.5');
-  else if (units === null) out.push(`Enter an amount like 12.5, with at most ${coin.decimals} decimals`);
+  else if (units === null) out.push(amountProblem(draft.amount, coin.decimals));
   else if (units <= 0n) out.push('The amount must be above zero');
   else if (units + (account.delay ? 0n : draft.fee ?? 0n) > account.record.available) {
     out.push(`Only ${amount(account.record.available, coin.decimals)} ${coin.symbol} available`);
@@ -150,7 +150,7 @@ export const send = {
       if (!answer.fee.trim()) draft.feeAuto = true;
       else {
         const v = parseAmount(answer.fee, coin.decimals);
-        if (v === null) return toast('Not an amount');
+        if (v === null) return toast(amountProblem(answer.fee, coin.decimals));
         draft.fee = v;
         draft.feeAuto = false;
       }
@@ -323,7 +323,8 @@ export const receive = {
     const account = accounts[receiveState.slot];
     const net = session.net.chainId.slice(0, 8);
     const units = coin && receiveState.ask ? parseAmount(receiveState.ask, coin.decimals) : null;
-    const link = `ting:pay?to=${account}${units && coin ? `&coin=${coin.id}&amount=${receiveState.ask.trim()}` : ''}&net=${net}`;
+    // The amount as read, written as links write it: `0,55` typed is `0.55` in the link.
+    const link = `ting:pay?to=${account}${units && coin ? `&coin=${coin.id}&amount=${linkAmount(units, coin.decimals)}` : ''}&net=${net}`;
     let qr = '';
     try { qr = qrSvg(link); } catch { /* too long */ }
     const lock = session.identity?.slots[receiveState.slot];

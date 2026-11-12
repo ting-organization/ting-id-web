@@ -73,13 +73,34 @@ export function shortAmount(units, decimals) {
 /** An amount's text as HTML, its fraction smaller and fainter. */
 export const fractionHtml = (text) => esc(text).replace(/\.(\d+)/, '<span class="frac">.$1</span>');
 
-/** Units of a decimal amount such as `12.5`, or null. */
+/** An amount for a link: whole coins with a dot and no grouping, `1234.5`, as LINKS.md writes it. */
+export const linkAmount = (units, decimals) => amount(units, decimals).replace(/[^\d.]/g, '');
+
+/** `1,000`: a comma before exactly three digits, a thousand to some and one to others. */
+const THOUSAND_COMMA = /^[1-9]\d*,\d{3}$/;
+
+/** The amount as typed, without the spaces or underscores that may group its digits. */
+const compact = (text) => String(text ?? '').trim().replace(/[\s_]/g, '');
+
+/**
+ * Units of an amount as typed, `12.5`, or `12,5` from a keyboard with a
+ * decimal comma; null for anything else. Spaces may group digits, `1 000`,
+ * but a comma never does: `1,000` is refused rather than guessed at
+ * (amountProblem says so), as Ting ID reads amounts.
+ */
 export function parseAmount(text, decimals) {
-  const m = String(text).trim().replace(/[\s,_ ]/g, '').match(/^(\d*)(?:\.(\d*))?$/);
+  const t = compact(text);
+  if (THOUSAND_COMMA.test(t)) return null;
+  const m = t.replace(/^(\d+),(\d*)$/, '$1.$2').match(/^(\d*)(?:\.(\d*))?$/);
   if (!m || (m[1] === '' && !m[2])) return null;
   if ((m[2] ?? '').length > decimals) return null;
   return BigInt(m[1] || '0') * 10n ** BigInt(decimals) + BigInt((m[2] ?? '').padEnd(decimals, '0') || '0');
 }
+
+/** Why `text` is no amount, in words, for when parseAmount gives null. */
+export const amountProblem = (text, decimals) => (THOUSAND_COMMA.test(compact(text))
+  ? 'Write a thousand as 1000, and decimals as 1.5 or 1,5'
+  : `Enter an amount like 12.5, with at most ${decimals} decimals`);
 
 /** `7a3f9c2e…6d2c48` */
 export const short = (id) => {
