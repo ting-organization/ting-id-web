@@ -1,4 +1,5 @@
-// Wallet, the home tab: what you hold, the three actions, and what happened.
+// Wallet, the home tab: what you hold, the three actions, what waits (changes
+// to the identity, scheduled actions, what was sent) and what happened.
 import { hex, unhex } from '../../../kit/web/bytes.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
@@ -6,6 +7,7 @@ import { activityList, coinMark, notices, scheduledList, waitingList } from '../
 import { session } from '../session.js';
 import * as store from '../store.js';
 import { $$, esc, fractionHtml, icon, initials, problem, shortAmount, toast } from '../ui.js';
+import { bindChanges, changesList } from './changes.js';
 import { firstCoins } from './sponsor.js';
 
 export function currentCoin() {
@@ -52,7 +54,7 @@ export const wallet = {
       <div class="columns">
         <div class="lead-col">${hero()}
           <div class="screen stack mt">${notices()}${firstCoins()}${devHint()}</div>
-          <div class="screen">${scheduledList()}${waitingList()}</div>
+          <div class="screen">${changesList({ wallet: true })}${scheduledList()}${waitingList()}</div>
         </div>
         <div class="side screen"><h2 class="section">Activity</h2>${activityList()}</div>
       </div>
@@ -60,6 +62,7 @@ export const wallet = {
   },
 
   bind(view) {
+    bindChanges(view);
     // Listen on this render's own element: `view` outlives it.
     view.firstElementChild.addEventListener('click', async (e) => {
       const cancel = e.target.closest('[data-cancel]');

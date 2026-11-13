@@ -97,7 +97,9 @@ export function encodeChange(ops) {
 /**
  * An identity as the chain holds it now, read with proofs: its core, its
  * current keys with their ids, its slots' delays, its newest changes, and
- * which of `guardians` (candidates the wallet knows) are linked.
+ * which of `guardians` (candidates the wallet knows) are linked. `linked`
+ * also says, by hex ID, whether each guardian its pending changes name is,
+ * which decides whether those changes can apply (changes.js).
  */
 export async function readIdentity(pool, registry, id, guardians = []) {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -138,8 +140,16 @@ export async function readIdentity(pool, registry, id, guardians = []) {
       change.ops = decodeChange(r);
       if (change.epoch === core.changeEpoch && keys.some((k) => k.keyId === change.proposer)) pending.push(change);
     }
-    const linked = guardians.filter(() => Boolean(values[at++]));
-    return { id, core, keys, slots: slotDelays, pending: pending.reverse(), guardians: linked };
+    const links = new Map(guardians.map((g) => [hex(g), Boolean(values[at++])]));
+    // The guardians pending changes name that the wallet did not know to ask about, read after.
+    const named = [...new Set(pending.flatMap((c) => c.ops).filter((op) => op.kind === 'addGuardian' || op.kind === 'removeGuardian')
+      .map((op) => hex(op.guardian)))].filter((g) => !links.has(g));
+    if (named.length) {
+      const more = await pool.storage(named.map((g) => [registry, guardianKey(id, unhex(g))]));
+      named.forEach((g, i) => links.set(g, Boolean(more[i])));
+    }
+    const linked = guardians.filter((g) => links.get(hex(g)));
+    return { id, core, keys, slots: slotDelays, pending: pending.reverse(), guardians: linked, linked: links };
   }
   throw new Error('The identity kept changing while it was read: try again.');
 }
