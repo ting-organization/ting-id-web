@@ -311,6 +311,7 @@ const STAGES = {
   included: ['check', 'Confirmed', 'good'],
   done: ['check', 'Confirmed', 'good'],
   failed: ['x', 'Failed', 'bad'],
+  lost: ['x', 'Not included', 'bad'],
 };
 
 export const tx = {
@@ -325,7 +326,8 @@ export const tx = {
       <h1 class="page">Transaction</h1>
       <div class="big-amount"><span class="avatar status ${tone}">${icon(mark)}</span>
         <b class="headline">${esc(mine?.summary ?? 'A transaction')}</b><p><span class="chip ${tone}">${esc(label)}</span></p></div>
-      ${!t && !last ? `<div class="note">${icon('info')}<div>The node does not know this transaction yet. If it was just sent, give it a moment.</div></div>` : ''}
+      ${!t && !last && state === 'lost' ? `<div class="note bad">${icon('warn')}<div>No block included it, and the network has dropped it: nothing was paid or changed.</div></div>` : ''}
+      ${!t && !last && state === 'pending' ? `<div class="note">${icon('info')}<div>The node does not know this transaction yet. If it was just sent, give it a moment.</div></div>` : ''}
       ${state === 'failed' ? `<div class="note bad">${icon('warn')}<div>${esc(reasonOf(last.receipt))}</div></div>` : ''}
       <div class="card mt">
         <div class="kv block"><span>Transaction</span><div class="mono small">${grouped(id)}</div></div>

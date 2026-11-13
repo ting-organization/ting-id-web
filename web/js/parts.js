@@ -156,6 +156,7 @@ const STATES = {
   deferred: 'Held by the node until its time',
   included: 'In a block; done once a few more follow',
   failed: 'Not done',
+  lost: 'Not included: nothing was paid or changed',
 };
 
 /**
@@ -169,8 +170,10 @@ const heldForLater = (p) => p.notBefore && ['pending', 'deferred'].includes(p.st
 export function waitingList() {
   const items = session.pending().filter((p) => !['done', 'dismissed'].includes(p.state) && !heldForLater(p));
   if (!items.length) return '';
-  const rows = items.map((p) => `<div class="row"><span class="avatar">${p.state === 'failed' ? icon('warn') : '<span class="spinner"></span>'}</span>
+  // A failed transaction, or one the network dropped without including it, waits only to be dismissed.
+  const over = (p) => ['failed', 'lost'].includes(p.state);
+  const rows = items.map((p) => `<div class="row"><span class="avatar">${over(p) ? icon('warn') : '<span class="spinner"></span>'}</span>
     <a class="main" href="#/tx/${p.id}"><b>${esc(p.summary)}</b><span>${esc(STATES[p.state] ?? p.state)}${p.reason ? ` · ${esc(p.reason)}` : ''} · sent ${esc(when(Math.floor(p.at / 1000)))}</span></a>
-    ${p.state === 'failed' ? `<button class="btn small secondary" data-dismiss="${p.id}">Dismiss</button>` : icon('chevron')}</div>`).join('');
+    ${over(p) ? `<button class="btn small secondary" data-dismiss="${p.id}">Dismiss</button>` : icon('chevron')}</div>`).join('');
   return `<h2 class="section">Waiting (${items.length})</h2><div class="card list">${rows}</div>`;
 }

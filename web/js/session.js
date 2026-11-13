@@ -418,11 +418,18 @@ export const session = {
     const list = store.get().pending ?? [];
     let changed = false;
     for (const p of list) {
-      if (p.network !== this.net.key || ['done', 'failed', 'dismissed'].includes(p.state)) continue;
+      if (p.network !== this.net.key || ['done', 'failed', 'lost', 'dismissed'].includes(p.state)) continue;
       const t = await this.pool.transaction(p.id).catch(() => undefined);
       if (t === undefined) continue;
       if (t === null) {
-        if (Date.now() - p.at > 120_000 && Date.now() - (p.resent ?? 0) > 120_000 && Date.now() - p.at < 86_400_000) {
+        // Sent again while the node may have lost it, for a day from when it was due. After that a
+        // node drops what it could not include (it keeps nothing in its pool longer), and one that
+        // still does not know it never included it: nothing was paid or changed.
+        const since = Date.now() - Math.max(p.at, (p.notBefore ?? 0) * 1000);
+        if (since >= 86_400_000) {
+          p.state = 'lost';
+          changed = true;
+        } else if (Date.now() - p.at > 120_000 && Date.now() - (p.resent ?? 0) > 120_000) {
           await this.pool.submit(unhex(p.hex), p.notBefore).catch(() => {});
           p.resent = Date.now();
           changed = true;
