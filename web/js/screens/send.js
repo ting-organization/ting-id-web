@@ -309,10 +309,15 @@ export const onItsWay = (coinId, account, nonce, spend, validUntil) => ({
   coin: coinId, account: hex(account.account), nonce: nonce.toString(), spend: spend.toString(), expires: Number(validUntil),
 });
 
-/** This browser's actions of an account that a block may still include: waiting, and not expired. */
+/**
+ * This browser's actions of an account that a block may still include:
+ * waiting, not expired, and their nonce not yet used. Once a block used it,
+ * what the action takes is in what the last block read gives the account, or
+ * another action took its place.
+ */
 function stillOnItsWay(coinId, account) {
   return session.pending().filter((p) => p.coin === coinId && p.account === hex(account.account)
-    && ['pending', 'deferred'].includes(p.state)
+    && ['pending', 'deferred'].includes(p.state) && BigInt(p.nonce) >= account.record.nonce
     && (p.expires != null ? Date.now() / 1000 <= p.expires + LATE : Date.now() - p.at < 2 * 86_400_000));
 }
 

@@ -204,8 +204,9 @@ export const session = {
     const list = store.get().pending ?? [];
     // Handed before and lost, it is handed again: what it runs or applies still waits.
     if (list.some((p) => p.tag === tag && p.state !== 'lost')) return;
-    if (list.some((p) => p.tag === tag)) store.set({ pending: list.map((p) => (p.tag === tag ? { ...p, state: 'dismissed' } : p)) });
-    await this.call(this.registry, input, BUDGETS.execute, summary, { notBefore: at + 30, tag }).catch(() => {});
+    const sent = await this.call(this.registry, input, BUDGETS.execute, summary, { notBefore: at + 30, tag }).catch(() => null);
+    // Sent, the lost entry gives way to it: the same bytes, so the same id. Not sent, it stays lost, to be handed again.
+    if (sent) store.set({ pending: (store.get().pending ?? []).filter((p) => !(p.tag === tag && p.state === 'lost')) });
   },
 
   /** Recoveries of this identity that guardians approve now, as readRecoveries read them at the last block. */
