@@ -14,6 +14,9 @@
 /** Requests that open only from inside the wallet. */
 export const INSIDE_ONLY = new Set(['device', 'guardian', 'recover']);
 
+/** The requests Ting links make (LINKS.md, TCR-1, TOCS-1): what this wallet opens, or says it cannot. */
+export const REQUESTS = new Set(['pay', 'create', 'call', 'sign', ...INSIDE_ONLY]);
+
 /** The longest name a link carries. */
 export const TEXT_MAX = 80;
 
