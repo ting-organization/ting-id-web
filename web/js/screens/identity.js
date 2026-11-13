@@ -98,7 +98,7 @@ export const identity = {
     };
     // A change that could not apply, now or behind the ones already waiting, is refused before it is asked about.
     const check = (op) => {
-      const blocked = changes.blockedBehind(changes.stateOf(id), id.pending, [op]);
+      const blocked = changes.blockedBehind(changes.stateOf(id), id.pending, [op], id.keyId);
       if (blocked) throw new Error(changes.blockedWords(blocked.why, blocked.waiting, guardianName));
       return op;
     };

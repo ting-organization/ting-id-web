@@ -44,11 +44,13 @@ export function changesList({ wallet = false } = {}) {
     const status = blocked ? (blocked.forGood ? 'cannot apply' : 'cannot apply yet')
       : due ? 'ready to apply' : `applies ${when(Number(c.effectiveAt))}`;
     const words = blocked && changes.blockedWords(blocked.why, false, guardianName);
+    // Who proposed it: a change none of this owner's devices made stands out.
+    const by = c.proposer === mine ? 'by this device' : `by device #${c.proposer}`;
     const why = !blocked ? ''
       : blocked.forGood ? `${words}, so the registry refuses it.${mine != null ? ' Cancel it.' : ''}`
         : `${words}: it can apply only once another pending change has.`;
     return `<div class="row"><span class="avatar">${icon(blocked ? 'warn' : 'clock')}</span><span class="main"><b>${esc(c.ops.map(opWords).join(', '))}</b>
-      <span>#${c.changeNo} · ${esc(status)}</span>${why ? `<span class="wrap bad">${esc(why)}</span>` : ''}</span>
+      <span>#${c.changeNo} · ${esc(by)} · ${esc(status)}</span>${why ? `<span class="wrap bad">${esc(why)}</span>` : ''}</span>
       <span class="end">${due && !blocked ? `<button class="btn small secondary" data-apply-change="${c.changeNo}">Apply</button>` : ''}
       ${mine != null ? `<button class="btn small danger" data-cancel-change="${c.changeNo}">Cancel</button>` : ''}</span></div>`;
   }).join('');

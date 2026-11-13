@@ -395,7 +395,7 @@ export const session = {
       const found = await this.pool.storage(unread.map((g) => [this.registry, registry.guardianKey(id.id, unhex(g))]));
       unread.forEach((g, i) => state.linked.set(g, Boolean(found[i])));
     }
-    const blocked = changes.blockedBehind(state, id.pending, ops);
+    const blocked = changes.blockedBehind(state, id.pending, ops, id.keyId);
     if (blocked) throw new Error(changes.blockedWords(blocked.why, blocked.waiting, guardianName));
   },
 
