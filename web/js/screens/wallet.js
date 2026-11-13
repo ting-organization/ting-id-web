@@ -1,4 +1,5 @@
-// Wallet, the home tab: what you hold, the three actions, what waits (changes
+// Wallet, the home tab: what you hold, the four actions (send, receive, and
+// open a Ting link by scanning its code or pasting it), what waits (changes
 // to the identity, scheduled actions, what was sent) and what happened.
 import { hex, unhex } from '../../../kit/web/bytes.js';
 import { BUDGETS } from '../chain/budgets.js';
@@ -8,6 +9,7 @@ import { session } from '../session.js';
 import * as store from '../store.js';
 import { $$, esc, fractionHtml, icon, initials, problem, shortAmount, toast } from '../ui.js';
 import { bindChanges, changesList } from './changes.js';
+import { pasteLink } from './scan.js';
 import { firstCoins } from './sponsor.js';
 
 export function currentCoin() {
@@ -38,7 +40,8 @@ function hero() {
 const actions = () => `<div class="actions">
   <a class="action main" href="#/send"><span class="disc">${icon('up')}</span>Send</a>
   <a class="action" href="#/receive"><span class="disc">${icon('down')}</span>Receive</a>
-  <a class="action" href="#/scan"><span class="disc">${icon('scan')}</span>Scan</a></div>`;
+  <a class="action" href="#/scan"><span class="disc">${icon('scan')}</span>Scan</a>
+  <button class="action" data-paste><span class="disc">${icon('paste')}</span>Paste</button></div>`;
 
 function devHint() {
   if (session.net?.key !== 'development' || !session.coins.length) return '';
@@ -95,6 +98,7 @@ export const wallet = {
         toast(problem(err));
       }
     });
+    $$('[data-paste]', view).forEach((b) => b.addEventListener('click', pasteLink));
     $$('[data-coins]', view).forEach((b) => b.addEventListener('click', () => {
       const i = session.coins.indexOf(currentCoin());
       store.set({ coin: session.coins[(i + 1) % session.coins.length].id });

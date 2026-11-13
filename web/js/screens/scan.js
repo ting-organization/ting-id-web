@@ -1,6 +1,7 @@
 // Scan: the camera reads a Ting QR code (a pay link, a program's call link, a
 // create link, a device link, a guardian code, a recover code) and opens it,
-// as Ting ID's scanner does. The browser's own
+// as Ting ID's scanner does; a link someone sent is pasted instead, here or
+// with Paste on the wallet. The browser's own
 // barcode reader is used where there is one; elsewhere, Safari on iPhone
 // among them, the wallet's own decoder (qr-decode.js). Nothing leaves the
 // device: frames are read in the page and dropped.
@@ -45,6 +46,33 @@ function open(text) {
   return true;
 }
 
+/**
+ * Opens the Ting link on the clipboard. The browser asks before it lets the
+ * wallet read it, and some never do: then, or when the clipboard holds no
+ * Ting link, the link is pasted into a field instead.
+ */
+export async function pasteLink() {
+  let text = null;
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    // Not allowed, or no clipboard to read here: the field below takes it.
+  }
+  if (text && tingLink(text)) {
+    const opened = open(text.trim());
+    if (opened !== true) toast(opened);
+    return;
+  }
+  const answer = await ask({
+    title: 'Paste a link',
+    text: text ? 'What you copied is not a Ting link. Paste the link here.' : '',
+    fields: [{ name: 'link', label: 'Link', placeholder: 'ting:…', multiline: true }],
+    confirm: 'Open',
+  });
+  const opened = answer && open(answer.link.trim());
+  if (answer && opened !== true) toast(opened);
+}
+
 /** A reader of video frames: the browser's, or the wallet's own. */
 async function reader() {
   if ('BarcodeDetector' in window) {
@@ -84,18 +112,14 @@ export const scan = {
         <div class="camera-note" data-note><span class="spinner"></span> Starting the camera…</div>
       </div>
       <p class="center muted small mt">Hold the phone 20–30 cm away, so the code fills about half the square.</p>
-      <button class="btn secondary" data-paste>${icon('copy')} Paste a link</button>
+      <button class="btn secondary" data-paste>${icon('paste')} Paste a link</button>
     </section>`;
   },
 
   async bind(view) {
     stopScanning();
     addEventListener('hashchange', stopScanning, { once: true });
-    $('[data-paste]', view).addEventListener('click', async () => {
-      const answer = await ask({ title: 'Paste a link', fields: [{ name: 'link', label: 'Link', placeholder: 'ting:…', multiline: true }], confirm: 'Open' });
-      const opened = answer && open(answer.link.trim());
-      if (answer && opened !== true) toast(opened);
-    });
+    $('[data-paste]', view).addEventListener('click', pasteLink);
     const note = $('[data-note]', view);
     const video = $('video', view);
     if (!navigator.mediaDevices?.getUserMedia) {
