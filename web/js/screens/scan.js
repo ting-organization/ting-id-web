@@ -5,7 +5,7 @@
 // barcode reader is used where there is one; elsewhere, Safari on iPhone
 // among them, the wallet's own decoder (qr-decode.js). Nothing leaves the
 // device: frames are read in the page and dropped.
-import { hold, INSIDE_ONLY, requestOf } from '../links.js';
+import { hold, INSIDE_ONLY, requestOf, REQUESTS } from '../links.js';
 import { $, ask, esc, icon, toast } from '../ui.js';
 
 let running = null;
@@ -18,10 +18,15 @@ export function stopScanning() {
   running = null;
 }
 
-/** The Ting link in what a code holds: `ting:…`, or a wallet address with `#ting:…`. */
+/**
+ * The Ting link in what a code holds: `ting:…`, or a wallet address with
+ * `#ting:…`. Only a `ting:` that starts a word counts: "Meeting: 3pm" holds
+ * no link.
+ */
 function tingLink(text) {
-  const at = String(text).search(/ting:/i);
-  return at < 0 ? null : text.slice(at);
+  const t = String(text);
+  const m = /(?:^|[^a-z0-9])ting:/i.exec(t);
+  return m ? t.slice(m.index + m[0].length - 'ting:'.length) : null;
 }
 
 /** The screens of links that open only from inside the wallet. */
@@ -58,7 +63,8 @@ export async function pasteLink() {
   } catch {
     // Not allowed, or no clipboard to read here: the field below takes it.
   }
-  if (text && tingLink(text)) {
+  // Copied text is anything at all: it counts as a link only when it asks for something Ting links ask.
+  if (text && REQUESTS.has(requestOf(tingLink(text) ?? ''))) {
     const opened = open(text.trim());
     if (opened !== true) toast(opened);
     return;
