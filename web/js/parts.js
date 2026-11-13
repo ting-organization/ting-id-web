@@ -159,6 +159,14 @@ const STATES = {
 };
 
 /**
+ * A lost transaction in words. One that expired never did anything; one
+ * without an expiry (an identity call, or a run or apply handed to the node)
+ * was dropped, but what it runs or applies still waits, and it could still be
+ * sent again.
+ */
+export const lostWords = (p) => (p.expires != null ? 'Not included: nothing was paid or changed' : 'Dropped by the network before a block took it');
+
+/**
  * A transaction handed to the node to hold until its time, such as the run of
  * a withdrawal from Savings: its Scheduled row, or the change it applies on
  * Identity, shows it until then.
@@ -169,8 +177,10 @@ const heldForLater = (p) => p.notBefore && ['pending', 'deferred'].includes(p.st
 export function waitingList() {
   const items = session.pending().filter((p) => !['done', 'dismissed'].includes(p.state) && !heldForLater(p));
   if (!items.length) return '';
-  const rows = items.map((p) => `<div class="row"><span class="avatar">${p.state === 'failed' ? icon('warn') : '<span class="spinner"></span>'}</span>
-    <a class="main" href="#/tx/${p.id}"><b>${esc(p.summary)}</b><span>${esc(STATES[p.state] ?? p.state)}${p.reason ? ` · ${esc(p.reason)}` : ''} · sent ${esc(when(Math.floor(p.at / 1000)))}</span></a>
-    ${p.state === 'failed' ? `<button class="btn small secondary" data-dismiss="${p.id}">Dismiss</button>` : icon('chevron')}</div>`).join('');
+  // A failed transaction, or one the network dropped without including it, waits only to be dismissed.
+  const over = (p) => ['failed', 'lost'].includes(p.state);
+  const rows = items.map((p) => `<div class="row"><span class="avatar">${over(p) ? icon('warn') : '<span class="spinner"></span>'}</span>
+    <a class="main" href="#/tx/${p.id}"><b>${esc(p.summary)}</b><span>${esc(p.state === 'lost' ? lostWords(p) : STATES[p.state] ?? p.state)}${p.reason ? ` · ${esc(p.reason)}` : ''} · sent ${esc(when(Math.floor(p.at / 1000)))}</span></a>
+    ${over(p) ? `<button class="btn small secondary" data-dismiss="${p.id}">Dismiss</button>` : icon('chevron')}</div>`).join('');
   return `<h2 class="section">Waiting (${items.length})</h2><div class="card list">${rows}</div>`;
 }

@@ -5,8 +5,8 @@ import { idOf } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
 import { autoFee, knownFee } from '../chain/fees.js';
-import { accountBox, coinMark, exactMoney, money, notices, who } from '../parts.js';
-import { reasonOf, session } from '../session.js';
+import { accountBox, coinMark, exactMoney, lostWords, money, notices, who } from '../parts.js';
+import { LATE, reasonOf, session } from '../session.js';
 import * as store from '../store.js';
 import { $, $$, amount, amountProblem, ask, copy, duration, esc, fractionHtml, grouped, icon, initials, linkAmount, openSheet, parseAmount, problem, short, shortAmount, toast, when } from '../ui.js';
 import { currentCoin } from './wallet.js';
@@ -47,8 +47,8 @@ function problems(coin, account) {
   if (!draft.amount.trim()) out.push('Enter an amount like 12.5');
   else if (units === null) out.push(amountProblem(draft.amount, coin.decimals));
   else if (units <= 0n) out.push('The amount must be above zero');
-  else if (units + (extra(account) ?? 0n) > account.record.available) {
-    out.push(`Only ${amount(account.record.available, coin.decimals)} ${coin.symbol} available`);
+  else if (units + (extra(account) ?? 0n) > spendable(coin.id, account)) {
+    out.push(`Only ${amount(spendable(coin.id, account), coin.decimals)} ${coin.symbol} available`);
   }
   return out;
 }
@@ -118,7 +118,7 @@ export const send = {
       draft.to = text;
     });
     $('[data-max]', view).addEventListener('click', () => {
-      const most = account.record.available - (extra(account) ?? 0n);
+      const most = spendable(coin.id, account) - (extra(account) ?? 0n);
       draft.amount = most > 0n ? amount(most, coin.decimals).replace(/ /g, '') : '0';
       form.amount.value = draft.amount;
     });
@@ -272,13 +272,16 @@ export const review = {
         const units = parseAmount(draft.amount, coin.decimals);
         const slot = signer.slot(account.slot);
         const nonce = nextNonce(coin.id, account);
+        const fee = account.delay ? 0n : draft.fee ?? 0n;
+        const tip = account.delay ? draft.runFee ?? 0n : 0n;
+        const validUntil = coins.signedExpiry();
         const input = await coins.actionInput({
           chain: session.chain, coin: unhex(coin.id), signer: slot, nonce,
-          effect: coins.transferEffect(to, units), fee: account.delay ? 0n : draft.fee ?? 0n,
-          tip: account.delay ? draft.runFee ?? 0n : 0n,
+          effect: coins.transferEffect(to, units), fee, tip, validUntil,
         });
         const summary = `${amount(units, coin.decimals)} ${coin.symbol} to ${who(hex(to))}`;
-        const sent = await session.call(unhex(coin.id), input, BUDGETS.execute, summary, { coin: coin.id, account: hex(account.account), nonce: nonce.toString() });
+        const sent = await session.call(unhex(coin.id), input, BUDGETS.execute, summary,
+          onItsWay(coin.id, account, nonce, units + fee + tip, validUntil));
         if (account.delay) {
           // The run of the scheduled payment, handed to the node to hold until it is due.
           const notBefore = Math.floor(Date.now() / 1000) + Number(account.delay) + 30;
@@ -297,12 +300,40 @@ export const review = {
   },
 };
 
+/**
+ * What a transaction notes of an action of `account`, so the actions after it
+ * know it is on its way: its nonce, what it takes from the account (`spend`:
+ * payment, fee and tip) and when its signature stops being valid.
+ */
+export const onItsWay = (coinId, account, nonce, spend, validUntil) => ({
+  coin: coinId, account: hex(account.account), nonce: nonce.toString(), spend: spend.toString(), expires: Number(validUntil),
+});
+
+/**
+ * This browser's actions of an account that a block may still include:
+ * waiting, not expired, and their nonce not yet used. Once a block used it,
+ * what the action takes is in what the last block read gives the account, or
+ * another action took its place.
+ */
+function stillOnItsWay(coinId, account) {
+  return session.pending().filter((p) => p.coin === coinId && p.account === hex(account.account)
+    && ['pending', 'deferred'].includes(p.state) && BigInt(p.nonce) >= account.record.nonce
+    && (p.expires != null ? Date.now() / 1000 <= p.expires + LATE : Date.now() - p.at < 2 * 86_400_000));
+}
+
 /** The next nonce for an account: after this browser’s own action still on its way, if any. */
 export function nextNonce(coinId, account) {
-  const pending = session.pending().filter((p) => p.coin === coinId && p.account === hex(account.account)
-    && ['pending', 'deferred'].includes(p.state) && Date.now() - p.at < 2 * 86_400_000);
-  const noted = pending.map((p) => BigInt(p.nonce)).reduce((a, b) => (b > a ? b : a), -1n);
+  const noted = stillOnItsWay(coinId, account).map((p) => BigInt(p.nonce)).reduce((a, b) => (b > a ? b : a), -1n);
   return noted >= account.record.nonce ? noted + 1n : account.record.nonce;
+}
+
+/**
+ * What an account can still spend: what the last block read gives it, less
+ * what this browser's actions still on their way take.
+ */
+export function spendable(coinId, account) {
+  const left = account.record.available - stillOnItsWay(coinId, account).reduce((sum, p) => sum + BigInt(p.spend ?? 0), 0n);
+  return left > 0n ? left : 0n;
 }
 
 const STAGES = {
@@ -311,6 +342,7 @@ const STAGES = {
   included: ['check', 'Confirmed', 'good'],
   done: ['check', 'Confirmed', 'good'],
   failed: ['x', 'Failed', 'bad'],
+  lost: ['x', 'Not included', 'bad'],
 };
 
 export const tx = {
@@ -325,7 +357,10 @@ export const tx = {
       <h1 class="page">Transaction</h1>
       <div class="big-amount"><span class="avatar status ${tone}">${icon(mark)}</span>
         <b class="headline">${esc(mine?.summary ?? 'A transaction')}</b><p><span class="chip ${tone}">${esc(label)}</span></p></div>
-      ${!t && !last ? `<div class="note">${icon('info')}<div>The node does not know this transaction yet. If it was just sent, give it a moment.</div></div>` : ''}
+      ${!t && !last && state === 'lost' ? `<div class="note bad">${icon('warn')}<div>${esc(mine.expires != null
+    ? 'No block included it, and it can no longer be: nothing was paid or changed.'
+    : `${lostWords(mine)}. Nothing in it expires, so it was not done, but could still be.`)}</div></div>` : ''}
+      ${!t && !last && state === 'pending' ? `<div class="note">${icon('info')}<div>The node does not know this transaction yet. If it was just sent, give it a moment.</div></div>` : ''}
       ${state === 'failed' ? `<div class="note bad">${icon('warn')}<div>${esc(reasonOf(last.receipt))}</div></div>` : ''}
       <div class="card mt">
         <div class="kv block"><span>Transaction</span><div class="mono small">${grouped(id)}</div></div>

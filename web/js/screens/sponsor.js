@@ -19,7 +19,7 @@ import { coinMark, exactMoney, fingerprint, keyKind, netTag } from '../parts.js'
 import { session } from '../session.js';
 import * as store from '../store.js';
 import { $, amount, amountProblem, duration, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
-import { nextNonce } from './send.js';
+import { nextNonce, onItsWay } from './send.js';
 
 const checked = new Map();
 
@@ -123,8 +123,9 @@ export const sponsor = {
         const nonce = nextNonce(coin.id, spending);
         const who = link.name ?? `Identity ${short(id)}`;
         const summary = `${exists ? '' : `Create ${who}, and send `}${amount(units, coin.decimals)} ${coin.symbol}${exists ? ` to ${who}` : ''}`;
-        const pay = { chain: session.chain, coin: unhex(coin.id), signer: signer.slot(0), nonce, effect: coins.transferEffect(to, units), fee };
-        const noted = { coin: coin.id, account: hex(spending.account), nonce: nonce.toString() };
+        const validUntil = coins.signedExpiry();
+        const pay = { chain: session.chain, coin: unhex(coin.id), signer: signer.slot(0), nonce, effect: coins.transferEffect(to, units), fee, validUntil };
+        const noted = onItsWay(coin.id, spending, nonce, units + fee, validUntil);
         let sent;
         if (exists) {
           sent = await session.call(unhex(coin.id), await coins.actionInput(pay), BUDGETS.execute, summary, noted);

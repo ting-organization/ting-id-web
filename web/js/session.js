@@ -14,6 +14,12 @@ import * as store from './store.js';
 import { short } from './ui.js';
 
 const SLOT_NAMES = ['Spending', 'Savings'];
+
+/** A day, in ms: the longest a node keeps a transaction in its pool (POOL_AGE). */
+const DAY = 86_400_000;
+
+/** How far, in seconds, a block's time may trail the clock: it only has to pass the median of the blocks before it. */
+export const LATE = 3600;
 export const slotName = (n) => SLOT_NAMES[Number(n)] ?? `Account ${Number(n) + 1}`;
 
 /** What this browser calls the identity `g` (hex), as a guardian: its contact's name, else its short ID. */
@@ -195,8 +201,12 @@ export const session = {
 
   /** Hands an unsigned registry call to the node to hold until `at`, block time: once for each `tag`. */
   async hand(tag, input, at, summary) {
-    if ((store.get().pending ?? []).some((p) => p.tag === tag)) return;
-    await this.call(this.registry, input, BUDGETS.execute, summary, { notBefore: at + 30, tag }).catch(() => {});
+    const list = store.get().pending ?? [];
+    // Handed before and lost, it is handed again: what it runs or applies still waits.
+    if (list.some((p) => p.tag === tag && p.state !== 'lost')) return;
+    const sent = await this.call(this.registry, input, BUDGETS.execute, summary, { notBefore: at + 30, tag }).catch(() => null);
+    // Sent, the lost entry gives way to it: the same bytes, so the same id. Not sent, it stays lost, to be handed again.
+    if (sent) store.set({ pending: (store.get().pending ?? []).filter((p) => !(p.tag === tag && p.state === 'lost')) });
   },
 
   /** Recoveries of this identity that guardians approve now, as readRecoveries read them at the last block. */
@@ -349,7 +359,7 @@ export const session = {
     const list = store.get().pending ?? [];
     let changed = false;
     for (const p of list) {
-      if (p.runOf && p.network === this.net.key && ['pending', 'deferred'].includes(p.state) && !live.has(p.runOf) && Date.now() - p.at > 60_000) {
+      if (p.runOf && p.network === this.net.key && ['pending', 'deferred', 'lost'].includes(p.state) && !live.has(p.runOf) && Date.now() - p.at > 60_000) {
         p.state = 'dismissed';
         changed = true;
       }
@@ -418,11 +428,23 @@ export const session = {
     const list = store.get().pending ?? [];
     let changed = false;
     for (const p of list) {
+      // A lost one is still looked up: anyone with its bytes may have sent it again.
       if (p.network !== this.net.key || ['done', 'failed', 'dismissed'].includes(p.state)) continue;
       const t = await this.pool.transaction(p.id).catch(() => undefined);
       if (t === undefined) continue;
       if (t === null) {
-        if (Date.now() - p.at > 120_000 && Date.now() - (p.resent ?? 0) > 120_000 && Date.now() - p.at < 86_400_000) {
+        // Sent again while it may still be included. One with an expiry (`expires`, what its signature
+        // allows) can be until a while after it, as a block's time may trail the clock; nothing in one
+        // without expires, and the wallet sends it again for a day from when it was sent or came due,
+        // when every node has dropped it from its pool. After that it is lost (parts.js says what that means).
+        const now = Date.now();
+        const end = p.expires != null ? (p.expires + LATE) * 1000 : Math.max(p.at, (p.notBefore ?? 0) * 1000) + DAY;
+        if (now >= end) {
+          if (p.state !== 'lost') {
+            p.state = 'lost';
+            changed = true;
+          }
+        } else if (now - p.at > 120_000 && now - (p.resent ?? 0) > 120_000) {
           await this.pool.submit(unhex(p.hex), p.notBefore).catch(() => {});
           p.resent = Date.now();
           changed = true;
