@@ -94,10 +94,26 @@ export function encodeChange(ops) {
   return w.finish();
 }
 
+/** Change numbers read with the identity, newest first; further back, more at a time (one request of the pool's). */
+const FIRST_LOOK = 40n;
+const LOOK = 256n;
+
+/** The change numbers below `below`, newest first, at most `span` of them. */
+function changeNumbers(below, span) {
+  const out = [];
+  for (let c = below - 1n; c >= 0n && c >= below - span; c--) out.push(c);
+  return out;
+}
+
 /**
  * An identity as the chain holds it now, read with proofs: its core, its
- * current keys with their ids, its slots' delays, its newest changes, and
- * which of `guardians` (candidates the wallet knows) are linked.
+ * current keys with their ids, its slots' delays, its pending changes, and
+ * which of `guardians` (candidates the wallet knows) are linked. Changes are
+ * read back from the newest until one of an earlier change epoch, as every
+ * change before it is older still: a long run of changes cannot hide an older
+ * one that is still pending, as Ting ID reads them. `linked`
+ * also says, by hex ID, whether each guardian its pending changes name is,
+ * which decides whether those changes can apply (changes.js).
  */
 export async function readIdentity(pool, registry, id, guardians = []) {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -108,8 +124,7 @@ export async function readIdentity(pool, registry, id, guardians = []) {
     for (let k = 0n; k < core.nextKeyId; k++) keyIds.push(k);
     const slots = [];
     for (let s = 0n; s < core.slotCount; s++) slots.push(s);
-    const changes = [];
-    for (let c = core.nextChange - 1n; c >= 0n && changes.length < 40; c--) changes.push(c);
+    const changes = changeNumbers(core.nextChange, FIRST_LOOK);
     const reads = [
       [registry, coreKey(id)],
       ...keyIds.map((k) => [registry, keyKey(id, core.keyEpoch, k)]),
@@ -130,16 +145,34 @@ export async function readIdentity(pool, registry, id, guardians = []) {
       return v ? new Reader(v).u64() : 0n;
     });
     const pending = [];
-    for (const changeNo of changes) {
-      const v = values[at++];
-      if (!v) continue;
+    let older = false;
+    const take = (numbers, records) => numbers.forEach((changeNo, i) => {
+      const v = records[i];
+      if (!v) return;
       const r = new Reader(v);
       const change = { changeNo, epoch: r.u64(), proposer: r.u64(), proposedAt: r.u64(), effectiveAt: r.u64() };
       change.ops = decodeChange(r);
-      if (change.epoch === core.changeEpoch && keys.some((k) => k.keyId === change.proposer)) pending.push(change);
+      if (change.epoch < core.changeEpoch) older = true;
+      else if (keys.some((k) => k.keyId === change.proposer)) pending.push(change);
+    });
+    take(changes, values.slice(at, at + changes.length));
+    at += changes.length;
+    const links = new Map(guardians.map((g) => [hex(g), Boolean(values[at++])]));
+    // Further back, while no change of an earlier epoch has turned up.
+    for (let below = core.nextChange - BigInt(changes.length); below > 0n && !older; below -= LOOK) {
+      const numbers = changeNumbers(below, LOOK);
+      take(numbers, await pool.storage(numbers.map((c) => [registry, changeKey(id, c)])));
     }
-    const linked = guardians.filter(() => Boolean(values[at++]));
-    return { id, core, keys, slots: slotDelays, pending: pending.reverse(), guardians: linked };
+    pending.sort((a, b) => (a.changeNo < b.changeNo ? -1 : 1));
+    // The guardians pending changes name that the wallet did not know to ask about, read after.
+    const named = [...new Set(pending.flatMap((c) => c.ops).filter((op) => op.kind === 'addGuardian' || op.kind === 'removeGuardian')
+      .map((op) => hex(op.guardian)))].filter((g) => !links.has(g));
+    if (named.length) {
+      const more = await pool.storage(named.map((g) => [registry, guardianKey(id, unhex(g))]));
+      named.forEach((g, i) => links.set(g, Boolean(more[i])));
+    }
+    const linked = guardians.filter((g) => links.get(hex(g)));
+    return { id, core, keys, slots: slotDelays, pending, guardians: linked, linked: links };
   }
   throw new Error('The identity kept changing while it was read: try again.');
 }

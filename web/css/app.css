@@ -197,6 +197,8 @@ a.row:hover, button.row:hover { background: color-mix(in srgb, var(--accent-soft
 .row .main > b { display: block; font-weight: 600; }
 .row .main > span { display: block; color: var(--muted); font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .main > span.wrap { white-space: normal; }
+.row .main > span.bad { color: var(--red); }
+.card.warn { border-color: color-mix(in srgb, var(--amber) 55%, var(--line)); }
 .row .end { text-align: right; font-weight: 600; white-space: nowrap; }
 .row .end.in { color: var(--green); }
 .row .end small { display: block; color: var(--muted); font-weight: 500; font-size: 13px; }

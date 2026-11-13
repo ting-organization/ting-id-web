@@ -7,22 +7,21 @@ import { hex, unhex } from '../../../kit/web/bytes.js';
 import { qrSvg } from '../../../kit/web/qr.js';
 import { idOf } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
+import * as changes from '../chain/changes.js';
 import * as registry from '../chain/registry.js';
 import { guardianCode, guardianLink, heldLink, hold, readLink } from '../links.js';
 import * as p256 from '../p256.js';
 import * as passkey from '../passkey.js';
 import * as phrase from '../phrase.js';
-import { accountBox, fingerprint, isPhraseKey, keyKind, netTag, notices } from '../parts.js';
-import { session, slotName } from '../session.js';
+import { accountBox, fingerprint, keyKind, netTag, notices } from '../parts.js';
+import { guardianName, session, slotName } from '../session.js';
 import * as store from '../store.js';
 import { $, $$, ask, copy, duration, esc, icon, initials, openSheet, problem, short, toast, when } from '../ui.js';
+import { bindChanges, changesList } from './changes.js';
 import { bindRecoveringCard, phraseSection, recoveringCard, recoveryWarnings } from './recovery.js';
 
 /** `ting:device?id=…&scheme=webauthn&key=…&net=…`: asks another device to add this browser’s passkey. */
 const deviceLink = (id, key) => `ting:device?id=${hex(id)}&scheme=webauthn&key=${hex(key)}&net=${netTag()}`;
-
-/** What this browser calls the guardian `g` (hex): its contact's name, else its short ID. */
-const guardianName = (g) => store.contactOfIdentity(g)?.name ?? `Identity ${short(g)}`;
 
 const propose = (ops, summary) => session.propose(ops, summary);
 
@@ -32,28 +31,25 @@ export const identity = {
     const id = session.identity;
     if (!saved || !id) return '<section class="screen plain"><h1 class="page">Identity</h1></section>';
     const mine = id.keyId;
+    // A device or guardian a waiting change removes already is not offered for removal again.
+    const waiting = (match) => id.pending.find((c) => c.ops.some(match));
     const devices = id.keys.map((k) => {
       const kind = keyKind(k);
       const here = k.keyId === mine;
+      const removing = waiting((op) => op.kind === 'removeKey' && op.keyId === k.keyId);
       return `<div class="row"><span class="avatar">${icon(here ? 'check' : 'key')}</span><span class="main">
-        <b>${here ? 'This device' : `${kind} #${k.keyId}`}</b><span>${esc(kind)} · ${fingerprint(k.params)}</span></span>
-        ${id.keys.length > 1 && !here && mine != null ? `<button class="btn small danger" data-remove="${k.keyId}">Remove</button>` : ''}</div>`;
-    }).join('');
-    const pending = id.pending.map((c) => {
-      const due = Number(c.effectiveAt) <= Date.now() / 1000;
-      const text = c.ops.map((op) => opWords(op)).join(', ');
-      return `<div class="row"><span class="avatar">${icon('clock')}</span><span class="main"><b>${esc(text)}</b>
-        <span>#${c.changeNo} · ${due ? 'ready to apply' : `applies ${esc(when(Number(c.effectiveAt)))}`}</span></span>
-        <span class="end">${due ? `<button class="btn small secondary" data-apply="${c.changeNo}">Apply</button>` : ''}
-        ${mine != null ? `<button class="btn small danger" data-cancel="${c.changeNo}">Cancel</button>` : ''}</span></div>`;
+        <b>${here ? 'This device' : `${kind} #${k.keyId}`}</b><span>${esc(kind)} · ${fingerprint(k.params)}${removing ? ` · removed once change #${removing.changeNo} applies` : ''}</span></span>
+        ${!here && mine != null && !removing ? `<button class="btn small danger" data-remove="${k.keyId}">Remove</button>` : ''}</div>`;
     }).join('');
     const guardians = (saved.guardians ?? []).map((g) => {
       const linked = id.guardians.some((x) => hex(x) === g);
-      const linking = !linked && id.pending.find((c) => c.ops.some((op) => op.kind === 'addGuardian' && hex(op.guardian) === g));
-      const state = linked ? 'Linked' : linking ? `Linked once change #${linking.changeNo} applies` : 'Not linked';
+      const linking = !linked && waiting((op) => op.kind === 'addGuardian' && hex(op.guardian) === g);
+      const unlinking = linked && waiting((op) => op.kind === 'removeGuardian' && hex(op.guardian) === g);
+      const text = unlinking ? `Unlinked once change #${unlinking.changeNo} applies` : linked ? 'Linked'
+        : linking ? `Linked once change #${linking.changeNo} applies` : 'Not linked';
       return `<div class="row"><span class="avatar">${icon('shield')}</span><span class="main"><b>${esc(guardianName(g))}</b>
-        <span>${esc(state)}</span></span>
-        ${linked && mine != null ? `<button class="btn small danger" data-unlink="${g}">Unlink</button>` : ''}</div>`;
+        <span>${esc(text)}</span></span>
+        ${linked && mine != null && !unlinking ? `<button class="btn small danger" data-unlink="${g}">Unlink</button>` : ''}</div>`;
     }).join('');
     const core = id.core;
     return `<section>
@@ -72,8 +68,7 @@ export const identity = {
         ${id.onChain && mine == null ? notThisBrowser(saved) : ''}
         <h2 class="section">Devices</h2>
         <div class="card list">${devices || '<div class="row"><span class="main"><span>None yet</span></span></div>'}</div>
-        ${pending ? `<h2 class="section">Pending changes</h2><div class="card list">${pending}</div>
-          <p class="muted small">A change waits ${esc(duration(core.changeDelay))}; until then any of your devices can cancel it.</p>` : ''}
+        ${changesList()}
         <h2 class="section">Guardians</h2>
         <div class="card list">${guardians || '<div class="row"><span class="main"><b>No guardians linked from here</b><span class="wrap">Guardians are people you trust. Enough of them together can give your identity new keys if you lose every device.</span></span></div>'}</div>
         ${mine != null ? `<a class="link" href="#/add-guardian" data-link-guardian>${icon('shield')} Link a guardian</a>` : ''}
@@ -101,19 +96,23 @@ export const identity = {
         b.disabled = false;
       }
     };
-    $$('[data-remove]', view).forEach((b) => b.addEventListener('click', act(async () =>
-      (await ask({ title: `Remove device #${b.dataset.remove}?`, text: `It takes effect after ${duration(id.core.changeDelay)}; until then any of your devices can cancel it.`, confirm: 'Remove device', danger: true }))
-        && propose([{ kind: 'removeKey', keyId: BigInt(b.dataset.remove) }], `Remove device #${b.dataset.remove}`))));
-    $$('[data-cancel]', view).forEach((b) => b.addEventListener('click', act(async () => {
-      const signer = session.signer();
-      const input = await registry.cancelInput({ chain: session.chain, registry: session.registry, id: id.id, signer, numbers: [BigInt(b.dataset.cancel)] });
-      return session.call(session.registry, input, BUDGETS.execute, `Cancel change #${b.dataset.cancel}`);
+    // A change that could not apply, now or behind the ones already waiting, is refused before it is asked about.
+    const check = (op) => {
+      const blocked = changes.blockedBehind(changes.stateOf(id), id.pending, [op], id.keyId);
+      if (blocked) throw new Error(changes.blockedWords(blocked.why, blocked.waiting, guardianName));
+      return op;
+    };
+    $$('[data-remove]', view).forEach((b) => b.addEventListener('click', act(async () => {
+      const op = check({ kind: 'removeKey', keyId: BigInt(b.dataset.remove) });
+      return (await ask({ title: `Remove device #${b.dataset.remove}?`, text: `It takes effect after ${duration(id.core.changeDelay)}; until then any of your devices can cancel it.`, confirm: 'Remove device', danger: true }))
+        && propose([op], `Remove device #${b.dataset.remove}`);
     })));
-    $$('[data-apply]', view).forEach((b) => b.addEventListener('click', act(() =>
-      session.call(session.registry, registry.applyInput(id.id, BigInt(b.dataset.apply)), BUDGETS.execute, `Apply change #${b.dataset.apply}`))));
-    $$('[data-unlink]', view).forEach((b) => b.addEventListener('click', act(async () =>
-      (await ask({ title: `Unlink ${guardianName(b.dataset.unlink)}?`, text: `They will no longer help recover your identity. It takes effect after ${duration(id.core.changeDelay)}; until then any of your devices can cancel it.`, confirm: 'Unlink', danger: true }))
-        && propose([{ kind: 'removeGuardian', guardian: unhex(b.dataset.unlink) }], `Unlink guardian ${guardianName(b.dataset.unlink)}`))));
+    bindChanges(view);
+    $$('[data-unlink]', view).forEach((b) => b.addEventListener('click', act(async () => {
+      const op = check({ kind: 'removeGuardian', guardian: unhex(b.dataset.unlink) });
+      return (await ask({ title: `Unlink ${guardianName(b.dataset.unlink)}?`, text: `They will no longer help recover your identity. It takes effect after ${duration(id.core.changeDelay)}; until then any of your devices can cancel it.`, confirm: 'Unlink', danger: true }))
+        && propose([op], `Unlink guardian ${guardianName(b.dataset.unlink)}`);
+    })));
     // A guardian code held from an earlier scan is not the one to link now.
     $('[data-link-guardian]', view)?.addEventListener('click', () => hold(null));
     $('[data-guardian-code]', view)?.addEventListener('click', () => showGuardianCode());
@@ -155,21 +154,6 @@ function notThisBrowser(saved) {
     <div class="qr">${qr}</div>
     <div class="mono small" data-device-link>${esc(link)}</div>
     <button class="btn secondary" data-copy-device>${icon('copy')} Copy link</button></div>`;
-}
-
-function opWords(op) {
-  // Only the phrase this browser made is called one: this list is where an owner spots a change they did not make.
-  if (op.kind === 'addKey' && isPhraseKey(op)) {
-    return `${hex(op.params) === session.saved()?.phraseKey ? 'Add your recovery phrase' : 'Add a phrase or phone key'} (${fingerprint(op.params)})`;
-  }
-  if (op.kind === 'addKey') return `Add a ${keyKind(op).toLowerCase()} (${fingerprint(op.params)})`;
-  if (op.kind === 'removeKey') return `Remove device #${op.keyId}`;
-  if (op.kind === 'addGuardian') return `Link guardian ${guardianName(hex(op.guardian))}`;
-  if (op.kind === 'removeGuardian') return `Unlink guardian ${guardianName(hex(op.guardian))}`;
-  if (op.kind === 'threshold') return 'Change how many guardians recover';
-  if (op.kind === 'delays') return 'Change the delays';
-  if (op.kind === 'slotDelay') return `Change ${slotName(op.slot)}’s lock`;
-  return 'A change';
 }
 
 /** The user's guardian code: scanned in Ting ID or here, it links this identity as the scanner's guardian. */

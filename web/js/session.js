@@ -4,15 +4,20 @@
 import { equal, hex, Reader, unhex } from '../../kit/web/bytes.js';
 import { encodeCall, transactionId } from '../../kit/web/ting.js';
 import { BUDGETS } from './chain/budgets.js';
+import * as changes from './chain/changes.js';
 import * as coins from './chain/coins.js';
 import { networks, POLICY_CODE_HASH } from './chain/net.js';
 import { Pool } from './chain/pool.js';
 import * as registry from './chain/registry.js';
 import { identitySigner } from './chain/signer.js';
 import * as store from './store.js';
+import { short } from './ui.js';
 
 const SLOT_NAMES = ['Spending', 'Savings'];
 export const slotName = (n) => SLOT_NAMES[Number(n)] ?? `Account ${Number(n) + 1}`;
+
+/** What this browser calls the identity `g` (hex), as a guardian: its contact's name, else its short ID. */
+export const guardianName = (g) => store.contactOfIdentity(g)?.name ?? `Identity ${short(g)}`;
 
 export const session = {
   nets: [],
@@ -173,7 +178,8 @@ export const session = {
       return;
     }
     const change = id.pending.find((c) => c.ops.some((op) => op.kind === 'addKey' && hex(op.params) === saved.publicKey));
-    if (change) {
+    // A change that can never apply is not handed on: the node would hold it until it lapses.
+    if (change && !changes.blockedApply(changes.stateOf(id), id.pending, change)?.forGood) {
       await this.hand(`${saved.id}:apply:${change.changeNo}`, registry.applyInput(id.id, change.changeNo),
         Number(change.effectiveAt), 'Add this browser’s passkey');
     }
@@ -369,10 +375,38 @@ export const session = {
   async propose(ops, summary) {
     const signer = this.signer();
     if (!signer) throw new Error('This browser can’t act for this identity yet');
+    await this.checkChange(ops);
     const input = await registry.proposeInput({
       chain: this.chain, registry: this.registry, id: this.identity.id, opNonce: this.identity.core.opNonce, signer, ops,
     });
     return this.call(this.registry, input, BUDGETS.execute, summary);
+  },
+
+  /**
+   * Refuses `ops` that could not apply to the identity, as it is or once the
+   * changes already waiting apply (changes.js): such a change would only wait
+   * to be cancelled. The guardians they name that were not read are read now.
+   */
+  async checkChange(ops) {
+    const id = this.identity;
+    const state = changes.stateOf(id);
+    const unread = changes.guardiansNamed(ops).filter((g) => !state.linked.has(g));
+    if (unread.length) {
+      const found = await this.pool.storage(unread.map((g) => [this.registry, registry.guardianKey(id.id, unhex(g))]));
+      unread.forEach((g, i) => state.linked.set(g, Boolean(found[i])));
+    }
+    const blocked = changes.blockedBehind(state, id.pending, ops, id.keyId);
+    if (blocked) throw new Error(changes.blockedWords(blocked.why, blocked.waiting, guardianName));
+  },
+
+  /** Applies pending change `changeNo`: one that is not pending, or can no longer apply, is refused, as the registry would. */
+  applyChange(changeNo) {
+    const id = this.identity;
+    const change = id?.pending.find((c) => c.changeNo === changeNo);
+    if (!change) throw new Error(`Change #${changeNo} is no longer pending`);
+    const why = changes.blockedNow(changes.stateOf(id), change.ops);
+    if (why) throw new Error(`Change #${changeNo} can no longer apply. ${changes.blockedWords(why, false, guardianName)}`);
+    return this.call(this.registry, registry.applyInput(id.id, changeNo), BUDGETS.execute, `Apply change #${changeNo}`);
   },
 
   /** Sends a call to `target` with `input` and the budget its kind needs. */
