@@ -13,7 +13,7 @@ import { coinMark, exactMoney as money, notices, who } from '../parts.js';
 import { session } from '../session.js';
 import { $, amount, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
 import { INSIDE_ONLY } from '../links.js';
-import { prefill } from './send.js';
+import { nextNonce, onItsWay, prefill, spendable } from './send.js';
 import { sponsor } from './sponsor.js';
 
 /** Reference programs: a call link never names one of these as its program. */
@@ -54,15 +54,17 @@ async function check(link) {
 }
 
 /**
- * What the call takes from Spending, payment and fee, and what Spending has
- * now: a call that takes more is refused by the coin, and would only wait.
+ * What the call takes from Spending, payment and fee, and what Spending can
+ * spend now, this browser's payments still on their way left out: a call
+ * that takes more is refused by the coin, and would only wait.
  */
 function taking(c) {
   const { f, coin, units, fee } = c;
   if (!coin) return null;
+  const spending = session.coins.find((x) => x.id === coin.id)?.accounts[0];
   const need = (f.burn || f.to ? units ?? 0n : 0n) + (fee ?? 0n);
-  const available = session.coins.find((x) => x.id === coin.id)?.accounts[0]?.record.available ?? 0n;
-  return { need, available, short: need > available };
+  const available = spending ? spendable(coin.id, spending) : 0n;
+  return { spending, need, available, short: need > available };
 }
 
 function shown(part, coin) {
@@ -152,23 +154,27 @@ export const link = {
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
       try {
-        const { f, program, coin, spending, units, fee } = c;
+        const { f, program, coin, units, fee } = c;
+        const { spending } = take ?? {};
         const slot = signer.slot(0);
         const nonceBytes = await session.pool.record(program, tcr.nonceKey(slot.account));
         const nonce = nonceBytes ? new DataView(nonceBytes.buffer, nonceBytes.byteOffset).getBigUint64(0, true) : 0n;
+        const validUntil = BigInt(Math.floor(Date.now() / 1000) + 3600);
+        // The payment queues behind this browser's own payments from Spending still on their way.
+        const coinNonce = spending ? nextNonce(coin.id, spending) : 0n;
         let payment = null;
         if (f.burn || f.to) {
           const effect = f.burn ? coins.framed && new Uint8Array([2, ...u128le(units)]) : coins.transferEffect(unhex(f.to), units);
-          payment = { coin: unhex(coin.id), coinNonce: spending.record.nonce, effect, fee };
+          payment = { coin: unhex(coin.id), coinNonce, effect, fee };
         } else if (coin && fee) {
-          payment = { coin: unhex(coin.id), coinNonce: spending.record.nonce, effect: tcr.feeEffect(program), fee };
+          payment = { coin: unhex(coin.id), coinNonce, effect: tcr.feeEffect(program), fee };
         }
         const input = await tcr.signCall({
-          signer: slot, chain: session.chain, program, nonce, head: tcr.head(f.template, f.valueBytes), payment,
-          validUntil: BigInt(Math.floor(Date.now() / 1000) + 3600),
+          signer: slot, chain: session.chain, program, nonce, head: tcr.head(f.template, f.valueBytes), payment, validUntil,
         });
         const summary = `Program call · ${short(program)}`;
-        const sent = await session.call(program, input, BUDGETS.batch, summary, f.return ? { returnTo: f.return } : {});
+        const noted = payment ? onItsWay(coin.id, spending, coinNonce, take.need, validUntil) : { expires: Number(validUntil) };
+        const sent = await session.call(program, input, BUDGETS.batch, summary, { ...noted, ...(f.return ? { returnTo: f.return } : {}) });
         location.hash = `#/tx/${sent.id}`;
       } catch (err) {
         toast(problem(err));
