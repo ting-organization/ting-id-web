@@ -28,6 +28,26 @@ export function requestOf(text) {
   return /^\s*ting:(?:\/\/)?([a-z]+)/i.exec(String(text))?.[1].toLowerCase() ?? null;
 }
 
+/**
+ * The Ting link a page hands this wallet in its address, `#ting:call?…`, as
+ * written; null when the address holds none. Each field of a link is
+ * percent-encoded on its own and decoded once, by the link's reader (LINKS.md;
+ * TCR-1, the link), so the link is not decoded as a whole first: that would
+ * decode its fields twice, and a `return` address holding its own `&` would
+ * end there. Only a link percent-encoded as a whole, `#ting%3Acall%3F…`, is
+ * decoded, once, to read it as written.
+ */
+export function linkFromAddress(fragment) {
+  const raw = String(fragment ?? '');
+  if (requestOf(raw)) return raw;
+  try {
+    const whole = decodeURIComponent(raw);
+    return requestOf(whole) ? whole : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The request and fields of a Ting link; throws, saying why, when `text` is none. */
 export function readLink(text) {
   const request = requestOf(text);

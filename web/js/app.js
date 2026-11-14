@@ -2,6 +2,7 @@
 // `render(…args)`, which returns its HTML, and `bind(view, …args)`; `#/send`,
 // `#/identity`, … pick it. A Ting link opened as `#ting:call?…` (or pay,
 // device) goes straight to its screen.
+import { linkFromAddress } from './links.js';
 import * as store from './store.js';
 import { $, copy, esc, icon, problem } from './ui.js';
 import { screens } from './screens.js';
@@ -51,7 +52,7 @@ function drawNav(current) {
 /** `#/name/arg…` → the screen and its arguments; a Ting link → the link screen. */
 function parse() {
   const raw = location.hash.slice(1);
-  if (/^ting:/i.test(decodeURIComponent(raw))) return { name: 'link', args: [raw] };
+  if (linkFromAddress(raw)) return { name: 'link', args: [raw] };
   const [name = '', ...args] = raw.replace(/^\/+/, '').split('/');
   return { name: name || 'wallet', args };
 }

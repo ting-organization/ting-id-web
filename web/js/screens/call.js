@@ -6,13 +6,15 @@
 // screen.
 import { hex, unhex } from '../../../kit/web/bytes.js';
 import * as tcr from '../../../kit/web/tcr.js';
+import { contractAccount } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
 import { autoFee } from '../chain/fees.js';
-import { coinMark, exactMoney as money, notices, who } from '../parts.js';
+import { coinMark, exactMoney as money, notices } from '../parts.js';
 import { session } from '../session.js';
-import { $, amount, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
-import { INSIDE_ONLY } from '../links.js';
+import * as store from '../store.js';
+import { $, amount, durationWords, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
+import { INSIDE_ONLY, linkFromAddress } from '../links.js';
 import { nextNonce, onItsWay, prefill, spendable } from './send.js';
 import { sponsor } from './sponsor.js';
 
@@ -67,28 +69,59 @@ function taking(c) {
   return { spending, need, available, short: need > available };
 }
 
-function shown(part, coin) {
+/**
+ * The names the wallet knows for a call's accounts: the user's own and their
+ * contacts, and the program's own account, which follows from the program's
+ * ContractId (TCR-1, a program's account). Null for any other account.
+ */
+function namesFor(program) {
+  const own = hex(contractAccount(program));
+  return (account) => (account === own ? 'this program’s own account' : store.nameOf(account, session.accounts()));
+}
+
+/** An account as TCR-1 has a wallet show one: by name, or else its 64 hex digits, marked as not a contact. */
+function accountShown(account, nameOf) {
+  const name = nameOf(account);
+  return name ? esc(name) : `<span class="mono">${account}</span> <span class="chip warn">not a contact</span>`;
+}
+
+/** A coin Ting ID does not follow: its ContractId in full, marked (TCR-1, field types). */
+const unknownCoin = (id) => `coin <span class="mono">${hex(id)}</span> <span class="chip warn">a coin you don’t follow</span>`;
+
+/** One part of the program's sentence, each value shown as TCR-1's field types say. */
+function shown(part, nameOf) {
   if (part.payment) return '';
   if (!part.slot) return esc(part.text);
   const { type, value } = part;
   let text;
   if (type === 'amount') {
     const c = session.coins.find((x) => x.id === hex(value.coin));
-    text = c ? money(value.amount, c) : `${value.amount} of coin ${short(value.coin)}`;
-  } else if (type === 'account') text = esc(who(hex(value)));
-  else if (type === 'coin') text = esc(session.coins.find((x) => x.id === hex(value))?.symbol ?? short(value));
+    text = c ? money(value.amount, c) : `${value.amount} of the smallest units of ${unknownCoin(value.coin)}`;
+  } else if (type === 'account') text = accountShown(hex(value), nameOf);
+  else if (type === 'coin') {
+    const c = session.coins.find((x) => x.id === hex(value));
+    text = c ? esc(c.symbol) : unknownCoin(value);
+  } else if (type === 'bytes32') text = `<span class="mono">${hex(value)}</span>`;
   else if (type === 'text') text = `“${esc(value)}”`;
   else if (type === 'time') text = esc(new Date(Number(value) * 1000).toLocaleString());
+  else if (type === 'duration') text = esc(durationWords(value));
+  else if (type === 'bytes') text = value.length === 1 ? '1 byte' : `${value.length} bytes`;
   else if (type.enum) text = esc(value.label);
   else if (type.list) text = `${value.length} items`;
-  else if (value instanceof Uint8Array) text = short(value);
   else text = esc(String(value));
   return `<b>${text}</b>`;
 }
 
+/** The hex of the sentence's `bytes` values, which it shows only by length, for when it is opened. */
+function bytesOpened(parts) {
+  const rows = parts.filter((p) => p.slot && p.type === 'bytes')
+    .map((p) => `<div class="kv"><span>${esc(p.slot)}</span><span class="mono">${hex(p.value) || '(empty)'}</span></div>`);
+  return rows.length ? `<details class="mt"><summary class="muted small">Show the bytes</summary>${rows.join('')}</details>` : '';
+}
+
 export const link = {
   async render(raw) {
-    const text = decodeURIComponent(raw);
+    const text = linkFromAddress(raw) ?? raw;
     const kind = (/^ting:(?:\/\/)?([a-z]+)/i.exec(text)?.[1] ?? '').toLowerCase();
     if (!session.saved() && kind !== 'pay') {
       return `<section class="screen plain narrow"><h1 class="page">Ting link</h1>
@@ -118,15 +151,16 @@ export const link = {
     }
     pending.set(text, c);
     const { f, program, parts, coin, units, fee } = c;
-    const sentence = parts.map((p) => (p.payment ? `<b>${coin ? money(units, coin) : f.amount ?? f.burn}</b>` : shown(p, coin))).join('');
-    const payWords = f.burn ? `Burns ${money(units, coin)}` : f.to ? `${money(units, coin)} to ${esc(who(f.to))}` : 'Nothing but the fee';
+    const nameOf = namesFor(program);
+    const sentence = parts.map((p) => (p.payment ? `<b>${coin ? money(units, coin) : f.amount ?? f.burn}</b>` : shown(p, nameOf))).join('');
+    const payWords = f.burn ? `Burns ${money(units, coin)}` : f.to ? `${money(units, coin)} to ${accountShown(f.to.toLowerCase(), nameOf)}` : 'Nothing but the fee';
     const take = taking(c);
     return `<section class="screen plain narrow">
       <h1 class="page">A program call</h1>
       ${notices()}
       <div class="card list mt"><div class="row"><span class="avatar">${icon('call')}</span><span class="main"><b>A program Ting ID does not know</b>
-        <span class="mono">Program ${short(program)}</span></span></div></div>
-      <div class="card pad mt"><div class="muted small">The program says</div><p class="says">${sentence}</p></div>
+        <span class="mono wrap">Program ${hex(program)}</span></span></div></div>
+      <div class="card pad mt"><div class="muted small">The program says</div><p class="says">${sentence}</p>${bytesOpened(parts)}</div>
       <div class="card mt">
         <div class="kv"><span>From</span><span>${esc(session.saved().name)} · Spending</span></div>
         <div class="kv"><span>${f.burn ? 'Burns' : f.to ? 'Pays' : 'Pays'}</span><span>${payWords}</span></div>
@@ -141,7 +175,7 @@ export const link = {
   },
 
   bind(view, raw) {
-    const text = decodeURIComponent(raw);
+    const text = linkFromAddress(raw) ?? raw;
     if (/^ting:(?:\/\/)?create/i.test(text)) return sponsor.bind(view, text);
     $('[data-approve]', view)?.addEventListener('click', async (e) => {
       const button = e.currentTarget;
