@@ -10,11 +10,11 @@ import { contractAccount } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
 import { autoFee } from '../chain/fees.js';
-import { coinMark, exactMoney as money, notices } from '../parts.js';
+import { coinMark, exactMoney as money, netTag, notices } from '../parts.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
 import { $, amount, durationWords, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
-import { INSIDE_ONLY, linkFromAddress } from '../links.js';
+import { INSIDE_ONLY, linkFromAddress, lowercaseIds, readPayLink } from '../links.js';
 import { nextNonce, onItsWay, prefill, spendable } from './send.js';
 import { sponsor } from './sponsor.js';
 
@@ -29,8 +29,8 @@ const REFERENCE_CODES = new Set([
 const pending = new Map();
 
 async function check(link) {
-  const f = await tcr.readLink(link);
-  if (f.net !== session.net.chainId.slice(0, 8)) throw new Error('This link is for another network.');
+  const f = lowercaseIds(await tcr.readLink(link));
+  if (f.net !== netTag()) throw new Error('This link is for another network.');
   const program = unhex(f.program);
   const contract = await session.pool.contract(program).catch(() => null);
   if (!contract) throw new Error('No program has that ID on this network.');
@@ -129,11 +129,22 @@ export const link = {
         <a class="btn primary mt" href="#/welcome">Get started</a></section>`;
     }
     if (kind === 'pay') {
-      const f = Object.fromEntries(new URLSearchParams(text.slice(text.indexOf('?') + 1)));
-      if (f.net && f.net !== session.net.chainId.slice(0, 8)) return failed('This pay link is for another network.');
-      // A link writes its amount with a dot, `12.5` (LINKS.md); `1,5` or `1,000` could mean two things.
-      if (f.amount && !/^\d+(\.\d+)?$/.test(f.amount)) return failed('This pay link’s amount is not written as links write one, like 12.5.');
-      prefill({ to: f.to, coin: f.coin, amount: f.amount });
+      let p;
+      try {
+        p = readPayLink(text, netTag());
+      } catch (e) {
+        return failed(problem(e));
+      }
+      // A coin the link names and the user doesn't follow is refused, as for a
+      // create or call link: Send would otherwise show the link's amount in
+      // the coin it shows by default. Without an identity yet, the coins a new
+      // one follows.
+      const followed = session.saved() ? session.coins.map((c) => c.id) : session.net.coins;
+      if (p.coin && !followed.includes(p.coin)) {
+        return failed(`The link pays in coin ${short(p.coin)}, which you do not follow. Follow it in Settings first.`);
+      }
+      // Only what the link asks: no amount left from an earlier payment.
+      prefill({ to: p.to, coin: p.coin, amount: p.amount ?? '' });
       setTimeout(() => { location.hash = '#/send'; });
       return '';
     }
@@ -153,7 +164,7 @@ export const link = {
     const { f, program, parts, coin, units, fee } = c;
     const nameOf = namesFor(program);
     const sentence = parts.map((p) => (p.payment ? `<b>${coin ? money(units, coin) : f.amount ?? f.burn}</b>` : shown(p, nameOf))).join('');
-    const payWords = f.burn ? `Burns ${money(units, coin)}` : f.to ? `${money(units, coin)} to ${accountShown(f.to.toLowerCase(), nameOf)}` : 'Nothing but the fee';
+    const payWords = f.burn ? `Burns ${money(units, coin)}` : f.to ? `${money(units, coin)} to ${accountShown(f.to, nameOf)}` : 'Nothing but the fee';
     const take = taking(c);
     return `<section class="screen plain narrow">
       <h1 class="page">A program call</h1>

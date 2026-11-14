@@ -174,6 +174,31 @@ export function readCreateLink(text, net) {
   return { input, name, coin: fields.coin?.toLowerCase() ?? null, amount: fields.amount ?? null };
 }
 
+/**
+ * A pay link's `{ to, coin, amount }` (LINKS.md: `to`, `coin`?, `amount`?,
+ * `net`): the account and coin in lowercase hex, as the wallet keeps its own,
+ * the coin and amount null when not given. Throws, saying why, for anything
+ * else, as Ting ID does.
+ */
+export function readPayLink(text, net) {
+  const fields = fieldsOf(text, 'pay', net);
+  if (!/^[0-9a-f]{64}$/i.test(fields.to ?? '')) throw new Error('The link’s account is not 64 hex digits');
+  if (fields.coin && !/^[0-9a-f]{64}$/i.test(fields.coin)) throw new Error('The link’s coin is not 64 hex digits');
+  // An amount with a dot, `12.5`: `1,5` or `1,000` could mean two things.
+  if (fields.amount && !/^\d+(\.\d+)?$/.test(fields.amount)) throw new Error('The link’s amount is not written as links write one, like 12.5');
+  return { to: fields.to.toLowerCase(), coin: fields.coin?.toLowerCase() || null, amount: fields.amount || null };
+}
+
+/**
+ * A call link's fields (kit/web/tcr.js `readLink`) with its network, program,
+ * coin and accounts in lowercase hex, as the wallet keeps its own: a link may
+ * write hex in either case (LINKS.md), and Ting ID reads it so.
+ */
+export function lowercaseIds(fields) {
+  for (const k of ['net', 'program', 'coin', 'to', 'from']) if (fields[k] != null) fields[k] = fields[k].toLowerCase();
+  return fields;
+}
+
 let held = null;
 
 /** Keeps a link scanned or pasted in the wallet for the screen it opens; null forgets it. */

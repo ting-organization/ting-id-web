@@ -153,7 +153,7 @@ node scripts/dev.mjs                         # the policy, policy-secp256k1 and 
 python3 kit/scripts/serve.py 8766            # http://127.0.0.1:8766/web/
 node kit/scripts/devchain.mjs fund <account> 10
 node scripts/test-phrase.mjs                 # recovery phrases against BIP-39, BIP-32, RFC 6979 and OpenSSL
-node scripts/test-call-links.mjs             # call links read from the address as written, and durations in words
+node scripts/test-call-links.mjs             # call and pay links read as written and as Ting ID reads them, and durations in words
 ```
 
 `reference/` holds the two reference programs the kit does not deploy,
