@@ -25,7 +25,7 @@ const extra = (account) => (account.delay ? draft.runFee : draft.fee);
 export function prefill({ to, coin, amount: a, slot }) {
   if (to) draft.to = to;
   if (coin) draft.coin = coin;
-  if (a) draft.amount = a;
+  if (a != null) draft.amount = a;
   if (slot != null) draft.slot = slot;
 }
 

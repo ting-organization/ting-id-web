@@ -109,6 +109,30 @@ export const short = (id) => {
   return `${h.slice(0, 8)}…${h.slice(-6)}`;
 };
 
+/** `v` with one decimal, as `toFixed(1)` rounds it, without a trailing `.0`: `1.5`, `2`. */
+function fixed1(v) {
+  const t = v.toFixed(1);
+  return t.endsWith('.0') ? t.slice(0, -2) : t;
+}
+
+/**
+ * A span of seconds in words, as Ting ID words one: `45 minutes`, `1 hour`,
+ * `12 hours`, `1.5 days`, `7 days`; `none` for 0. Under a minute it is its
+ * seconds, `10 seconds`, where Ting ID rounds to `0 minutes`: a call shown for
+ * approval never reads as no time at all when it is some. A count too large to
+ * be a safe number is shown as its seconds.
+ */
+export function durationWords(seconds) {
+  const s = Number(seconds);
+  if (!Number.isSafeInteger(s) || s < 0) return `${seconds} seconds`;
+  if (s === 0) return 'none';
+  const of = (n, noun) => `${n} ${n === '1' ? noun : `${noun}s`}`;
+  if (s < 60) return of(String(s), 'second');
+  if (s < 3600) return of(String(Math.round(s / 60)), 'minute');
+  if (s < 86_400) return of(fixed1(s / 3600), 'hour');
+  return of(fixed1(s / 86_400), 'day');
+}
+
 /** An id in groups of four, as Ting ID shows an address to check. */
 export const grouped = (id) => (typeof id === 'string' ? id : hex(id)).match(/.{1,4}/g).join(' ');
 
