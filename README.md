@@ -80,11 +80,17 @@ transaction creates it: a batch of the creation and a payment bound to it, whose
 fee pays for both.
 
 **What it signs lasts an hour.** A payment or a call that no block took within an
-hour of signing can no longer be included. The wallet goes by the chain's own time
-for that, three blocks down, and then shows it as not included, even while a node
-still holds it: the next action takes its place instead of waiting behind it. While
-one is on its way, the wallet asks before it sends the same payment again, or a
-second call to a program whose first still waits.
+hour of signing can no longer be included: an hour from the later of the device's
+clock and the newest block read from, so a slow clock signs nothing already expired.
+The wallet goes by the chain's own time for that, three blocks down, and then shows
+it as not included, even while a node still holds it. Payments from an account queue
+by its nonce, and calls to a program by the program's: the next one goes in after
+those still on their way. Behind one that did not go in, nothing more is signed
+until what waits behind it has expired, since it could not go in either. The wallet
+asks before it sends the same payment, or approves the same call, a second time
+while the first still waits. *Forget waiting transactions* in Settings puts away
+the payments and calls no block has taken; it cancels nothing, and says so, and
+until when they could still go through, before it does.
 
 **It trusts no node alone.** Every balance, nonce and identity record is read with
 a Merkle proof against the state root of a header the wallet checks itself: its hash

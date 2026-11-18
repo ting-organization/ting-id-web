@@ -2,15 +2,17 @@
 // What the wallet signs lasts an hour, and what no block took by then is
 // forgotten by the chain's time (web/js/chain/expiry.js): the rule itself,
 // the session marking such a transaction lost even while a node still holds
-// it, the next action taking its nonce, and the same payment or a second
-// call to one program found while the first still waits.
+// it, the next action taking its nonce, the same payment or call found while
+// the first still waits, how actions queue and when nothing more is signed
+// behind one that did not go in, and Settings forgetting what waits.
 //
 //   node scripts/test-expiry.mjs
 import { hex } from '../kit/web/bytes.js';
 import * as coins from '../web/js/chain/coins.js';
 import {
-  callKey, callWaiting, cannotGoIn, LATE, payKey, repeatOf, settledTime, TIME_BLOCKS, timeFrom, waiting,
+  callKey, cannotGoIn, forgettable, heldUp, LATE, nextIn, payKey, queueOf, repeatOf, settledTime, TIME_BLOCKS, timeFrom, waiting,
 } from '../web/js/chain/expiry.js';
+import { Pool } from '../web/js/chain/pool.js';
 
 // The session and the Send screen read the page's address when they load.
 globalThis.location = { hostname: 'localhost', hash: '' };
@@ -34,6 +36,21 @@ function expect(what, got, want) {
   const expiry = Number(coins.signedExpiry());
   const after = Math.floor(Date.now() / 1000);
   expect('signed now, it expires an hour from now', expiry >= before + 3600 && expiry <= after + 3600, true);
+  // By the later of the device's clock and the newest block read from: a clock that runs slow signs nothing expired on arrival.
+  expect('the chain ahead of the clock: an hour from the chain’s time', coins.signedExpiry(after + 7200), BigInt(after + 7200 + 3600));
+  const behind = Number(coins.signedExpiry(before - 7200));
+  expect('the chain behind the clock: an hour from the clock', behind >= before + 3600 && behind <= after + 3600, true);
+  const none = Number(coins.signedExpiry(null));
+  expect('no block read yet: an hour from the clock', none >= before + 3600 && none <= after + 3600, true);
+  expect('a time that is no number is not gone by', Number(coins.signedExpiry(NaN)) <= after + 3600, true);
+
+  // The pool's word for it: the timestamp of the newest block a checked read came from.
+  const pool = new Pool({ chainId: '00' }, []);
+  expect('no block read from yet', pool.tipTime(), null);
+  pool.newest = { height: 9n, timestamp: 1_800_000_000n };
+  expect('the newest block’s timestamp, in seconds', pool.tipTime(), 1_800_000_000);
+  pool.newest = { height: 9n, timestamp: 2n ** 63n };
+  expect('one beyond any date is not used', pool.tipTime(), null);
 }
 
 // ---- The chain's time ----------------------------------------------------------
@@ -102,16 +119,76 @@ const T = 1_800_000_000;
 
   const program = 'd1'.repeat(32), other = 'd2'.repeat(32);
   expect('a call’s key', callKey(program, 'beef'), `call:${program}:beef`);
-  const call = (at, more = {}) => ({ id: `call${at}`, at, state: 'pending', expires: T + 3600, program, callNonce: '7', ...more });
-  expect('a call to the program, signed with the same nonce', callWaiting([call(1)], program, 7n, now)?.id, 'call1');
-  expect('whatever it calls', callWaiting([call(1, { what: callKey(program, '01') }), call(2, { what: callKey(program, '02') })], program, 7n, now)?.id, 'call2');
-  expect('not a call to another program', callWaiting([call(1)], other, 7n, now), undefined);
-  expect('not one whose nonce the chain is past: it went in', callWaiting([call(1, { callNonce: '6' })], program, 7n, now), undefined);
-  expect('one with no nonce noted counts', callWaiting([call(1, { callNonce: undefined })], program, 7n, now)?.id, 'call1');
-  expect('not one noted without its program', callWaiting([call(1, { program: undefined })], program, 7n, now), undefined);
-  expect('not one lost', callWaiting([call(1, { state: 'lost' })], program, 7n, now), undefined);
-  expect('not one past its expiry', callWaiting([call(1, { expires: T - 10 })], program, 7n, T, T), undefined);
+  // The same call, by program and by what it calls.
+  const called = callKey(program, '01');
+  const call = (at, more = {}) => ({ id: `call${at}`, at, state: 'pending', expires: T + 3600, program, what: called, ...more });
+  expect('the same call, waiting', repeatOf([call(1)], called, now)?.id, 'call1');
+  expect('not another call to the program', repeatOf([call(1)], callKey(program, '02'), now), undefined);
+  expect('not the same call to another program', repeatOf([call(1)], callKey(other, '01'), now), undefined);
+}
 
+// ---- A queue, and when nothing more is signed into it ----------------------------
+
+{
+  const now = T;
+  const program = 'd1'.repeat(32);
+  const call = (nonce, more = {}) => ({ id: `call${nonce}`, state: 'pending', expires: T + 3600, program, callNonce: String(nonce), ...more });
+  const q = (items, chainNonce, chainTime = null, at = now) => queueOf(items, 'callNonce', chainNonce, at, chainTime);
+  const next = (items, chainNonce, chainTime = null, at = now) => nextIn(q(items, chainNonce, chainTime, at));
+  const held = (items, chainNonce, chainTime = null, at = now) => heldUp(q(items, chainNonce, chainTime, at), at);
+
+  // Calls to a program queue as payments do: each takes the nonce after the last still on its way.
+  expect('nothing waiting: the chain’s nonce', next([], 7n), 7n);
+  expect('one waiting: the nonce after it', next([call(7)], 7n), 8n);
+  expect('three waiting: after the last', next([call(7), call(9), call(8)], 7n), 10n);
+  expect('held by the node until its time counts', next([call(7, { state: 'deferred' })], 7n), 8n);
+  expect('one the chain is past is not in the way', next([call(6)], 7n), 7n);
+  for (const state of ['done', 'failed', 'lost', 'dismissed']) {
+    expect(`one ${state} is not in the way`, next([call(7, { state })], 7n), 7n);
+  }
+  expect('one past its expiry is not in the way', next([call(7, { expires: T - 10 })], 7n, T - 5), 7n);
+  expect('one noted without its nonce is not counted', next([call(7, { callNonce: undefined })], 7n), 7n);
+  // A lookup can be a block ahead of the read that gave the chain's nonce.
+  expect('a block took one the read does not show yet: the nonce after it', next([call(7, { state: 'included' })], 7n), 8n);
+  expect('and what queues behind that one is in turn', held([call(7, { state: 'included' }), call(8)], 7n), null);
+  expect('one included that the read already counts changes nothing', next([call(6, { state: 'included' })], 7n), 7n);
+
+  // In order from the chain's nonce and within their hour, another can follow.
+  expect('nothing waiting: sign', held([], 7n), null);
+  expect('one waiting, its turn: sign behind it', held([call(7)], 7n), null);
+  expect('three in order: sign behind them', held([call(8), call(7), call(9)], 7n), null);
+  // The one whose turn it is did not go in: what waits behind it cannot, and neither could another.
+  expect('the first failed: hold off until the rest have expired', held([call(7, { state: 'failed' }), call(8, { expires: T + 100 }), call(9, { expires: T + 900 })], 7n), { until: T + 900 });
+  expect('the first expired and is lost: the same', held([call(7, { state: 'lost', expires: T - 50 }), call(8, { expires: T + 600 })], 7n), { until: T + 600 });
+  expect('the first forgotten one by one: the same', held([call(7, { state: 'dismissed' }), call(8, { expires: T + 600 })], 7n), { until: T + 600 });
+  expect('a gap in the middle: the same', held([call(7), call(9, { expires: T + 700 })], 7n), { until: T + 3600 });
+  // Past its expiry by the clock, waiting only for the chain's time: nothing is signed behind it.
+  expect('the first past its expiry by the clock', held([call(7, { expires: T - 10 }), call(8, { expires: T + 500 })], 7n, T - 11), { until: T + 500 });
+  expect('all of them past it: until the last', held([call(7, { expires: T - 90 }), call(8, { expires: T - 10 })], 7n, T - 91), { until: T - 10 });
+  expect('exactly at its expiry a block may still take it', held([call(7, { expires: T })], 7n), null);
+  // Whoever keeps trying is not kept waiting by it: the time does not move, as nothing new is signed.
+  expect('later, the same time', held([call(7, { state: 'failed' }), call(8, { expires: T + 100 })], 7n, null, T + 60), { until: T + 100 });
+  // Once the chain's time has passed the last of them, the queue has run out.
+  const ranOut = [call(7, { state: 'failed' }), call(8, { expires: T + 100 })];
+  expect('the queue has run out: sign', held(ranOut, 7n, T + 100, T + 101), null);
+  expect('with the chain’s nonce', next(ranOut, 7n, T + 100, T + 101), 7n);
+  expect('one that never expires gives no time', held([call(7, { state: 'failed' }), call(8, { expires: undefined })], 7n), { until: null });
+
+  // Two different calls to one program, signed one after the other, both go in: 7, then 8.
+  const first = call(next([], 7n));
+  const second = call(next([first], 7n));
+  expect('the second call takes the program’s next nonce', [first.callNonce, second.callNonce], ['7', '8']);
+  expect('and a third can follow', held([first, second], 7n), null);
+
+  // What Settings forgets: what no block has taken, not what a node holds for later.
+  expect('one waiting is forgotten', forgettable({ state: 'pending', expires: T }, now), true);
+  expect('one lost is put away too', forgettable({ state: 'lost', expires: T }, now), true);
+  expect('one due, handed to the node earlier', forgettable({ state: 'pending', expires: T, notBefore: T - 5 }, now), true);
+  expect('not one held for a later time', forgettable({ state: 'pending', expires: T, notBefore: T + 5 }, now), false);
+  expect('not one that signed no expiry, such as an identity’s change', forgettable({ state: 'pending' }, now), false);
+  for (const state of ['deferred', 'included', 'done', 'failed', 'dismissed']) {
+    expect(`not one ${state}`, forgettable({ state, expires: T }, now), false);
+  }
 }
 
 // ---- The session forgets it, and the next action takes its nonce ----------------
@@ -255,6 +332,40 @@ const T = 1_800_000_000;
   tip(108);
   await session.watchPending();
   expect('another network’s is not touched', [state('i'), reads.length], ['pending', before]);
+
+  // A block took the first before the account was read again: the next goes after it, not at its nonce.
+  store.set({ pending: [item('j', 5, now + 3600, { state: 'included' })] });
+  expect('a block took one the read does not show yet', nextNonce(coin, account), 6n);
+  store.set({ pending: [item('j', 5, now + 3600, { state: 'included' }), item('k', 6, now + 3600)] });
+  expect('and one queued behind it is counted from there', nextNonce(coin, account), 7n);
+
+  // Settings forgets what waits: put away, never sent again, and nothing of it counts any more.
+  store.set({ pending: [
+    item('l', 5, now + 3600), item('m', 6, now + 3600), item('n', 4, now - 9000, { state: 'lost' }),
+    item('o', 7, now + 3600, { state: 'deferred' }),
+    { id: 'p', summary: 'Run', at: Date.now(), network: 'test', hex: '00', state: 'pending', notBefore: now + 9000, runOf: 'x' },
+    item('q', 3, now + 3600, { state: 'failed' }), item('r', 2, now + 3600, { state: 'done' }),
+    item('s', 5, now + 3600, { network: 'other' }),
+    { id: 't', summary: 'Link a guardian', at: Date.now(), network: 'test', hex: '00', state: 'pending' },
+  ] });
+  expect('before: the next action queues behind them', nextNonce(coin, account), 8n);
+  expect('what would be forgotten', session.forgettable().map((p) => p.id), ['l', 'm', 'n']);
+  expect('it says how many it forgot', session.forgetWaiting(), 3);
+  expect('they are put away', ['l', 'm', 'n'].map(state), ['dismissed', 'dismissed', 'dismissed']);
+  expect('what a node holds for later stays, and what is settled', ['o', 'p', 'q', 'r'].map(state), ['deferred', 'pending', 'failed', 'done']);
+  expect('an identity’s change is left alone', state('t'), 'pending');
+  expect('another network’s is left alone', state('s'), 'pending');
+  expect('nothing left to forget', [session.forgettable().length, session.forgetWaiting()], [0, 0]);
+  store.set({ pending: store.get().pending.filter((p) => p.id !== 'o') });
+  expect('the next action takes the chain’s nonce', nextNonce(coin, account), 5n);
+  expect('and all of the account is there to spend', spendable(coin, account), 1000n);
+  const sentBefore = resent;
+  answers.l = null;
+  answers.m = null;
+  tip(109);
+  await session.watchPending();
+  expect('forgotten, they are not sent again', resent, sentBefore);
+  expect('nor followed', ['l', 'm'].map(state), ['dismissed', 'dismissed']);
 }
 
 if (failed) {

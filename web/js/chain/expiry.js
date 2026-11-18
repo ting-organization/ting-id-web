@@ -1,9 +1,12 @@
-// When what the wallet signed can no longer go in, and whether the same
-// thing is still on its way. A signed action that no block took holds its
-// nonce only until it expires: after that the next action takes the chain's
-// nonce again, so one that could never go in does not keep every later one
-// waiting behind it. No DOM and no node here: scripts/test-expiry.mjs runs
-// these rules as they are.
+// When what the wallet signed can no longer go in, whether the same thing is
+// still on its way, and how its actions queue. Every action of an account
+// carries the next nonce, and a block takes them in order, so one that could
+// never go in keeps every later one waiting behind it. A signed action holds
+// its nonce only until it expires: once the last one queued has, the next
+// action takes the chain's nonce again. Until then nothing more is signed
+// behind one that did not go in: it could not go in either, and would only
+// hold the nonce an hour longer. No DOM and no node here:
+// scripts/test-expiry.mjs runs these rules as they are.
 
 /** How far, in seconds, a block's time may trail the clock: it only has to pass the median of the blocks before it. */
 export const LATE = 3600;
@@ -69,14 +72,53 @@ export function repeatOf(items, what, now, chainTime = null) {
 }
 
 /**
- * The newest of `items` still waiting that is a call to `program` (hex)
- * signed with the program's nonce `nonce`, or with one not noted: the
- * wallet signs each call with the nonce the chain holds, so of two such
- * calls only one can go in. One signed with an earlier nonce went in, or
- * gave way to another, and is not in the way.
+ * One nonce queue of this browser's as it stands: an account's actions in a
+ * coin, or its calls to a program. `items` are the queue's own, each with its
+ * nonce under `field`, and `chainNonce` is the nonce the last read of the
+ * chain gave. `head` is the nonce a block takes next: the chain's, or one
+ * past an action of this browser's that a block has taken since, as a lookup
+ * can be a block ahead of the read. `ahead` are the actions from `head` on
+ * that a block could still include.
  */
-export function callWaiting(items, program, nonce, now, chainTime = null) {
-  return items.filter((p) => p.program != null && p.program === program && waiting(p, now, chainTime)
-    && (p.callNonce == null || BigInt(p.callNonce) >= BigInt(nonce)))
-    .reduce((newest, p) => (!newest || p.at > newest.at ? p : newest), undefined);
+export function queueOf(items, field, chainNonce, now, chainTime = null) {
+  const at = (p) => BigInt(p[field]);
+  const own = items.filter((p) => p[field] != null);
+  let head = BigInt(chainNonce);
+  for (const p of own) if (p.state === 'included' && at(p) >= head) head = at(p) + 1n;
+  return { field, head, ahead: own.filter((p) => at(p) >= head && waiting(p, now, chainTime)) };
 }
+
+/** The nonce the next action of a queue takes: one past the last still on its way, so that it queues behind them; the head when none is. */
+export function nextIn({ field, head, ahead }) {
+  return ahead.reduce((next, p) => (BigInt(p[field]) >= next ? BigInt(p[field]) + 1n : next), head);
+}
+
+/**
+ * Whether another action should not be signed into a queue yet. One signed
+ * now takes the nonce after the last still on its way, so it goes in only
+ * if each of those does, in order. They cannot when the one whose turn it is
+ * did not go in: it failed, or expired, and left a gap, or it is past its
+ * expiry by the clock and only waits for the chain's time to say so. Signed
+ * behind it, a new one could not go in either, and would hold the nonce
+ * until its own expiry: whoever keeps trying would stay stuck. So nothing
+ * is signed until the queue has run out. Null when one can be signed; else
+ * `{ until }`, when the last of those ahead expires (seconds), or null when
+ * one of them never does.
+ */
+export function heldUp({ field, head, ahead }, now) {
+  if (!ahead.length) return null;
+  const nonces = [...new Set(ahead.map((p) => BigInt(p[field])))].sort((a, b) => (a < b ? -1 : 1));
+  const inOrder = nonces.length === ahead.length && nonces.every((n, i) => n === head + BigInt(i));
+  if (inOrder && !ahead.some((p) => p.expires != null && now > p.expires)) return null;
+  return { until: ahead.some((p) => p.expires == null) ? null : Math.max(...ahead.map((p) => p.expires)) };
+}
+
+/**
+ * What "Forget waiting transactions" puts away: the payments and calls that
+ * no block has taken and the wallet still follows or shows as lost, which
+ * are what signed something with an expiry. Not what a node holds for a
+ * later time, such as the run of a withdrawal from Savings, which waits as
+ * it should, and not an identity's change, which holds no payment back.
+ */
+export const forgettable = (p, now) =>
+  ['pending', 'lost'].includes(p.state) && p.expires != null && !(p.notBefore && p.notBefore > now);

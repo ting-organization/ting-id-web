@@ -6,7 +6,7 @@ import { encodeCall, transactionId } from '../../kit/web/ting.js';
 import { BUDGETS } from './chain/budgets.js';
 import * as changes from './chain/changes.js';
 import * as coins from './chain/coins.js';
-import { cannotGoIn, settledTime, TIME_BLOCKS, timeFrom } from './chain/expiry.js';
+import { cannotGoIn, forgettable, settledTime, TIME_BLOCKS, timeFrom } from './chain/expiry.js';
 import { networks, POLICY_CODE_HASH } from './chain/net.js';
 import { Pool } from './chain/pool.js';
 import * as registry from './chain/registry.js';
@@ -451,6 +451,15 @@ export const session = {
     return this.timeAt?.time ?? null;
   },
 
+  /**
+   * The time by the newest block the wallet read from, in seconds, or null
+   * before the first read: what is signed expires an hour from the later of
+   * this and the device's clock (coins.signedExpiry). Nothing is asked for it.
+   */
+  tipTime() {
+    return this.pool?.tipTime?.() ?? null;
+  },
+
   async watchPending() {
     const list = store.get().pending ?? [];
     let changed = false;
@@ -514,6 +523,32 @@ export const session = {
 
   dismiss(id) {
     store.set({ pending: (store.get().pending ?? []).map((p) => (p.id === id ? { ...p, state: 'dismissed' } : p)) });
+  },
+
+  /** What "Forget waiting transactions" would put away on this network (expiry.js, forgettable). */
+  forgettable() {
+    const now = Date.now() / 1000;
+    return this.pending().filter((p) => forgettable(p, now));
+  },
+
+  /**
+   * Puts away everything on this network that no block has taken, and gives
+   * how many: the wallet stops following them and sending them again, and
+   * they no longer hold a nonce, what they would spend, or a question about
+   * a repeat. Nothing is cancelled by it: one that a block can still include
+   * may go in all the same, which Settings says before it asks. What a node
+   * holds for a later time stays.
+   */
+  forgetWaiting() {
+    const now = Date.now() / 1000;
+    let count = 0;
+    const pending = (store.get().pending ?? []).map((p) => {
+      if (p.network !== this.net.key || !forgettable(p, now)) return p;
+      count++;
+      return { ...p, state: 'dismissed' };
+    });
+    if (count) store.set({ pending });
+    return count;
   },
 };
 

@@ -88,7 +88,7 @@ export const wallet = {
         } else {
           const signer = session.signer();
           if (!signer) return toast('This browser can’t act for this identity yet');
-          const validUntil = coins.signedExpiry();
+          const validUntil = coins.signedExpiry(session.tipTime());
           const input = await coins.cancelInput({ chain: session.chain, coin: unhex(coinId), signer: signer.slot(Number(slot)), sequences: [BigInt(seq)], validUntil });
           await session.call(unhex(coinId), input, BUDGETS.execute, `Cancel a scheduled ${coin.symbol} payment`, { expires: Number(validUntil) });
           session.dismissRun(`${coinId}:${hex(account.account)}:${seq}`);

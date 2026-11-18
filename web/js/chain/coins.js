@@ -46,13 +46,22 @@ export const transferEffect = (to, amount) => new Writer().u8(1).put(to).u128(am
 
 /**
  * How long, in seconds, a block can include what Ting ID signs: an hour.
- * Short on purpose. An action no block took is then over soon, and the next
- * one takes its nonce instead of waiting behind it (expiry.js).
+ * Short on purpose. An action that cannot go in holds its account's nonce,
+ * and so the account's next actions, until the last action queued behind it
+ * has expired; the wallet signs nothing more behind one that did not go in
+ * (expiry.js), so that is an hour, and a few blocks, after the last one.
  */
 export const SIGNED_LIFE = 3600;
 
-/** When what is signed now expires, in block time: `SIGNED_LIFE` from now. */
-export const signedExpiry = () => BigInt(Math.floor(Date.now() / 1000) + SIGNED_LIFE);
+/**
+ * When what is signed now expires, in block time: `SIGNED_LIFE` from now.
+ * Now is the later of this device's clock and `tipTime`, the timestamp of
+ * the newest block the wallet read from (seconds, or null): a block takes
+ * the action while its own timestamp is not past the expiry, so signed by a
+ * clock that runs an hour slow, it would have expired on arrival.
+ */
+export const signedExpiry = (tipTime = null) =>
+  BigInt(Math.max(Math.floor(Date.now() / 1000), Number.isSafeInteger(tipTime) ? tipTime : 0) + SIGNED_LIFE);
 
 /**
  * A coin action of an identity's slot, signed by its passkey: `10 ‖ 00 ‖

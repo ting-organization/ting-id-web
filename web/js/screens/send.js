@@ -4,7 +4,7 @@ import { qrSvg } from '../../../kit/web/qr.js';
 import { idOf } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
-import { cannotGoIn, payKey, repeatOf } from '../chain/expiry.js';
+import { heldUp, nextIn, payKey, queueOf, repeatOf } from '../chain/expiry.js';
 import { autoFee, knownFee } from '../chain/fees.js';
 import { accountBox, coinMark, exactMoney, lostWords, money, notices, who } from '../parts.js';
 import { reasonOf, session } from '../session.js';
@@ -269,6 +269,8 @@ export const review = {
       const to = idOf(draft.to.replace(/\s+/g, ''));
       const units = parseAmount(draft.amount, coin.decimals);
       const what = payKey(coin.id, hex(account.account), hex(to), units);
+      // Behind one that did not go in, this one could not either: not signed until the queue has run out.
+      if (heldOff(coin.id, account)) return;
       if (!await sendAgain(coin.id, account, what)) return;
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
@@ -277,7 +279,7 @@ export const review = {
         const nonce = nextNonce(coin.id, account);
         const fee = account.delay ? 0n : draft.fee ?? 0n;
         const tip = account.delay ? draft.runFee ?? 0n : 0n;
-        const validUntil = coins.signedExpiry();
+        const validUntil = coins.signedExpiry(session.tipTime());
         const input = await coins.actionInput({
           chain: session.chain, coin: unhex(coin.id), signer: slot, nonce,
           effect: coins.transferEffect(to, units), fee, tip, validUntil,
@@ -313,18 +315,40 @@ export const onItsWay = (coinId, account, nonce, spend, validUntil) => ({
 });
 
 /**
- * This browser's actions of an account that a block may still include:
- * waiting, not past their expiry by the clock and the chain's time
- * (expiry.js), and their nonce not yet used. Once a block used it, what the
- * action takes is in what the last block read gives the account, or another
- * action took its place.
+ * This browser's queue of an account's actions in a coin (expiry.js,
+ * queueOf): those a block may still include, waiting, not past their expiry
+ * by the clock and the chain's time, and their nonce not yet used. Once a
+ * block used it, what the action takes is in what the last block read gives
+ * the account, or another action took its place.
  */
-function stillOnItsWay(coinId, account) {
-  const now = Date.now() / 1000;
-  return session.pending().filter((p) => p.coin === coinId && p.account === hex(account.account)
-    && ['pending', 'deferred'].includes(p.state) && BigInt(p.nonce) >= account.record.nonce
-    && (p.expires != null ? !cannotGoIn(p.expires, now, session.chainTimeKnown()) : Date.now() - p.at < 2 * 86_400_000));
+function queue(coinId, account) {
+  const mine = session.pending().filter((p) => p.coin === coinId && p.account === hex(account.account)
+    // One noted without an expiry, by an earlier version, was signed for two days at most.
+    && (p.expires != null || Date.now() - p.at < 2 * 86_400_000));
+  return queueOf(mine, 'nonce', account.record.nonce, Date.now() / 1000, session.chainTimeKnown());
 }
+
+const stillOnItsWay = (coinId, account) => queue(coinId, account).ahead;
+
+/**
+ * Says why nothing more is signed into a queue that is held up (expiry.js,
+ * heldUp), and gives whether it is. `earlier` names what did not go in, as
+ * "one from Spending". Said when someone acts, and nowhere else: a queue is
+ * almost never held up.
+ */
+export function saysHeld(held, earlier) {
+  if (!held) return false;
+  toast(`An earlier ${earlier} did not go in, ${held.until == null
+    ? 'and what was signed after it still waits. Forget waiting transactions in Settings to start again.'
+    : held.until > Date.now() / 1000
+      ? `and what was signed after it is still expiring. Try again after ${when(held.until)}.`
+      : 'and is expiring now. Try again in a few minutes.'}`, 6000);
+  return true;
+}
+
+/** Whether a new action of `account` in a coin is held off for now, saying so when it is (saysHeld). */
+export const heldOff = (coinId, account) =>
+  saysHeld(heldUp(queue(coinId, account), Date.now() / 1000), `one from ${account.name ?? 'this account'}`);
 
 /**
  * Whether to go on with the payment `what` (expiry.js, payKey): at once
@@ -342,11 +366,8 @@ export async function sendAgain(coinId, account, what, again = 'If you send it a
   }));
 }
 
-/** The next nonce for an account: after this browser’s own action still on its way, if any. */
-export function nextNonce(coinId, account) {
-  const noted = stillOnItsWay(coinId, account).map((p) => BigInt(p.nonce)).reduce((a, b) => (b > a ? b : a), -1n);
-  return noted >= account.record.nonce ? noted + 1n : account.record.nonce;
-}
+/** The next nonce for an account: after this browser’s own actions still on their way, if any (expiry.js, nextIn). */
+export const nextNonce = (coinId, account) => nextIn(queue(coinId, account));
 
 /**
  * What an account can still spend: what the last block read gives it, less

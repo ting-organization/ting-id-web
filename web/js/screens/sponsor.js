@@ -20,7 +20,7 @@ import { coinMark, exactMoney, fingerprint, keyKind, netTag } from '../parts.js'
 import { session } from '../session.js';
 import * as store from '../store.js';
 import { $, amount, amountProblem, duration, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
-import { nextNonce, onItsWay, sendAgain } from './send.js';
+import { heldOff, nextNonce, onItsWay, sendAgain } from './send.js';
 
 const checked = new Map();
 
@@ -113,6 +113,8 @@ export const sponsor = {
       if (!signer) return toast('This browser can’t act for this identity yet');
       const to = registry.slotAccount(session.registry, id, 0);
       const what = payKey(coin.id, hex(spending.account), hex(to), units);
+      // Behind one that did not go in, this one could not either: not signed until the queue has run out.
+      if (heldOff(coin.id, spending)) return;
       // Sent twice to an identity on chain, both payments go through. Not yet on chain, each would
       // create it first, and the second creation fails, its payment with it.
       if (!await sendAgain(coin.id, spending, what, exists ? undefined
@@ -129,7 +131,7 @@ export const sponsor = {
         const nonce = nextNonce(coin.id, spending);
         const who = link.name ?? `Identity ${short(id)}`;
         const summary = `${exists ? '' : `Create ${who}, and send `}${amount(units, coin.decimals)} ${coin.symbol}${exists ? ` to ${who}` : ''}`;
-        const validUntil = coins.signedExpiry();
+        const validUntil = coins.signedExpiry(session.tipTime());
         const pay = { chain: session.chain, coin: unhex(coin.id), signer: signer.slot(0), nonce, effect: coins.transferEffect(to, units), fee, validUntil };
         const noted = { ...onItsWay(coin.id, spending, nonce, units + fee, validUntil), what };
         let sent;

@@ -9,14 +9,14 @@ import * as tcr from '../../../kit/web/tcr.js';
 import { contractAccount } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
-import { callKey, callWaiting } from '../chain/expiry.js';
+import { callKey, heldUp, nextIn, queueOf, repeatOf } from '../chain/expiry.js';
 import { autoFee } from '../chain/fees.js';
 import { coinMark, exactMoney as money, netTag, notices } from '../parts.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
 import { $, amount, ask, durationWords, esc, icon, parseAmount, problem, short, toast, when } from '../ui.js';
 import { INSIDE_ONLY, linkFromAddress, lowercaseIds, readPayLink } from '../links.js';
-import { nextNonce, onItsWay, prefill, spendable } from './send.js';
+import { heldOff, nextNonce, onItsWay, prefill, saysHeld, spendable } from './send.js';
 import { sponsor } from './sponsor.js';
 
 /** Reference programs: a call link never names one of these as its program. */
@@ -203,20 +203,32 @@ export const link = {
         const { spending } = take ?? {};
         const slot = signer.slot(0);
         const nonceBytes = await session.pool.record(program, tcr.nonceKey(slot.account));
-        const nonce = nonceBytes ? new DataView(nonceBytes.buffer, nonceBytes.byteOffset).getBigUint64(0, true) : 0n;
-        // Every call is signed with the nonce the chain holds for this account at the program. Of two
-        // calls to it waiting at once, then, only one can go in: said before a second one is signed.
-        const earlier = callWaiting(session.pending(), hex(program), nonce, Date.now() / 1000, session.chainTimeKnown());
-        if (earlier && !await ask({
-          title: 'Another call is still waiting',
-          text: `Your call to this program from ${when(Math.floor(earlier.at / 1000))} is still waiting for a block. Only one of the two can go in. Wait for it, or approve this one anyway.`,
-          confirm: 'Approve anyway',
+        const chainNonce = nonceBytes ? new DataView(nonceBytes.buffer, nonceBytes.byteOffset).getBigUint64(0, true) : 0n;
+        // Calls to a program queue as payments do: the next one takes the program's nonce after this
+        // browser's own calls to it still on their way, so that several can wait and go in, in order.
+        const now = Date.now() / 1000;
+        const calls = queueOf(session.pending().filter((p) => p.program === hex(program)), 'callNonce', chainNonce, now, session.chainTimeKnown());
+        const pays = Boolean(spending && (f.burn || f.to || fee));
+        // Behind a call, or a payment, that did not go in, this one could not either: not signed until the queue has run out.
+        if (saysHeld(heldUp(calls, now), 'call to this program') || (pays && heldOff(coin.id, spending))) {
+          button.disabled = false;
+          return;
+        }
+        const head = tcr.head(f.template, f.valueBytes);
+        const what = callKey(hex(program), hex(head));
+        // The same call again runs a second time, after the first: asked about before it is signed.
+        const before = repeatOf(calls.ahead, what, now, session.chainTimeKnown());
+        if (before && !await ask({
+          title: 'Approve it again?',
+          text: `You approved this call at ${when(Math.floor(before.at / 1000))}, and it is still waiting for a block. Approved again, it runs a second time, after the first.`,
+          confirm: 'Approve again',
         })) {
           button.disabled = false;
           return;
         }
         button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
-        const validUntil = coins.signedExpiry();
+        const nonce = nextIn(calls);
+        const validUntil = coins.signedExpiry(session.tipTime());
         // The payment queues behind this browser's own payments from Spending still on their way.
         const coinNonce = spending ? nextNonce(coin.id, spending) : 0n;
         let payment = null;
@@ -226,13 +238,12 @@ export const link = {
         } else if (coin && fee) {
           payment = { coin: unhex(coin.id), coinNonce, effect: tcr.feeEffect(program), fee };
         }
-        const head = tcr.head(f.template, f.valueBytes);
         const input = await tcr.signCall({ signer: slot, chain: session.chain, program, nonce, head, payment, validUntil });
         const summary = `Program call · ${short(program)}`;
-        // Noted with what it calls and the program's nonce it took, for the next call to this program to find it.
+        // Noted with what it calls and the program's nonce it took, for the next call to this program to queue behind it.
         const noted = {
           ...(payment ? onItsWay(coin.id, spending, coinNonce, take.need, validUntil) : { expires: Number(validUntil) }),
-          what: callKey(hex(program), hex(head)), program: hex(program), callNonce: nonce.toString(),
+          what, program: hex(program), callNonce: nonce.toString(),
         };
         const sent = await session.call(program, input, BUDGETS.batch, summary, { ...noted, ...(f.return ? { returnTo: f.return } : {}) });
         location.hash = `#/tx/${sent.id}`;
