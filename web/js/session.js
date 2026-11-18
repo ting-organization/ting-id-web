@@ -6,6 +6,7 @@ import { encodeCall, transactionId } from '../../kit/web/ting.js';
 import { BUDGETS } from './chain/budgets.js';
 import * as changes from './chain/changes.js';
 import * as coins from './chain/coins.js';
+import { cannotGoIn, settledTime, TIME_BLOCKS, timeFrom } from './chain/expiry.js';
 import { networks, POLICY_CODE_HASH } from './chain/net.js';
 import { Pool } from './chain/pool.js';
 import * as registry from './chain/registry.js';
@@ -18,8 +19,6 @@ const SLOT_NAMES = ['Spending', 'Savings'];
 /** A day, in ms: the longest a node keeps a transaction in its pool (POOL_AGE). */
 const DAY = 86_400_000;
 
-/** How far, in seconds, a block's time may trail the clock: it only has to pass the median of the blocks before it. */
-export const LATE = 3600;
 export const slotName = (n) => SLOT_NAMES[Number(n)] ?? `Account ${Number(n) + 1}`;
 
 /** What this browser calls the identity `g` (hex), as a guardian: its contact's name, else its short ID. */
@@ -39,6 +38,8 @@ export const session = {
   policyReady: false,
   listeners: new Set(),
   tipSeen: null,
+  /** The chain's time as last read, and the tip it was read at (chainTime). */
+  timeAt: null,
   timer: null,
 
   async open() {
@@ -50,6 +51,7 @@ export const session = {
     this.chain = unhex(this.net.chainId);
     this.registry = unhex(this.net.registry);
     this.policyReady = false;
+    this.timeAt = null;
     await this.refresh(true);
     clearInterval(this.timer);
     this.timer = setInterval(() => document.hidden || this.refresh().catch(() => {}), 8000);
@@ -70,6 +72,7 @@ export const session = {
     store.set({ nodes });
     this.pool = new Pool(this.net, urls);
     this.tipSeen = null;
+    this.timeAt = null;
   },
 
   onChange(fn) {
@@ -424,22 +427,62 @@ export const session = {
     return this.send(encodeCall(target, input, budget ?? BUDGETS.execute), summary, extra);
   },
 
+  /**
+   * The chain's time three blocks below the tip (expiry.js), or null when it
+   * cannot be read. Its eleven blocks are read once for a tip, and only when
+   * asked: watchPending asks while something waiting is past its expiry.
+   */
+  async chainTime() {
+    const { tip, height } = this.status ?? {};
+    if (!tip) return null;
+    if (this.timeAt?.tip === tip) return this.timeAt.time;
+    if (height < TIME_BLOCKS) return null;
+    try {
+      const page = await this.pool.blocks(timeFrom(height), 11);
+      this.timeAt = { tip, time: settledTime(page.items, height) };
+      return this.timeAt.time;
+    } catch {
+      return null;
+    }
+  },
+
+  /** The chain's time as last read, for a screen to go by: it only rises, so an earlier reading still holds. */
+  chainTimeKnown() {
+    return this.timeAt?.time ?? null;
+  },
+
   async watchPending() {
     const list = store.get().pending ?? [];
     let changed = false;
+    const watched = (p) => p.network === this.net.key && !['done', 'failed', 'dismissed'].includes(p.state);
+    // The chain's time is read only while something still waiting is past its expiry by the clock.
+    const clock = Date.now() / 1000;
+    const overdue = list.some((p) => watched(p) && p.state !== 'lost' && p.expires != null && clock > p.expires);
+    const chainTime = overdue ? await this.chainTime() : null;
     for (const p of list) {
       // A lost one is still looked up: anyone with its bytes may have sent it again.
-      if (p.network !== this.net.key || ['done', 'failed', 'dismissed'].includes(p.state)) continue;
+      if (!watched(p)) continue;
       const t = await this.pool.transaction(p.id).catch(() => undefined);
       if (t === undefined) continue;
+      const last = t?.occurrences?.at(-1);
+      // One with an expiry (`expires`, what its signature allows) that the clock and the chain's time
+      // are both past can no longer be included (expiry.js), whether or not a node still holds it: it
+      // is lost, and stays lost, so that the next action takes its nonce instead of waiting behind it.
+      // Only a block that did include it says otherwise.
+      if (!last && p.expires != null && (p.state === 'lost' || cannotGoIn(p.expires, clock, chainTime))) {
+        if (p.state !== 'lost') {
+          p.state = 'lost';
+          changed = true;
+        }
+        continue;
+      }
       if (t === null) {
-        // Sent again while it may still be included. One with an expiry (`expires`, what its signature
-        // allows) can be until a while after it, as a block's time may trail the clock; nothing in one
-        // without expires, and the wallet sends it again for a day from when it was sent or came due,
-        // when every node has dropped it from its pool. After that it is lost (parts.js says what that means).
+        // No node knows it, so it is sent again while it may still be included: one with an expiry until
+        // it is lost, above. Nothing in one without says when that is, and the wallet sends it again for
+        // a day from when it was sent or came due, when every node has dropped it from its pool. After
+        // that it is lost (parts.js says what that means).
         const now = Date.now();
-        const end = p.expires != null ? (p.expires + LATE) * 1000 : Math.max(p.at, (p.notBefore ?? 0) * 1000) + DAY;
-        if (now >= end) {
+        if (p.expires == null && now >= Math.max(p.at, (p.notBefore ?? 0) * 1000) + DAY) {
           if (p.state !== 'lost') {
             p.state = 'lost';
             changed = true;
@@ -451,7 +494,6 @@ export const session = {
         }
         continue;
       }
-      const last = t.occurrences?.at(-1);
       const next = last
         ? (last.receipt.status === 0 ? (this.status.height - last.height >= 2 ? 'done' : 'included') : 'failed')
         : t.deferred ? 'deferred' : 'pending';

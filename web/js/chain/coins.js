@@ -44,8 +44,15 @@ export function decodeScheduled(bytes) {
 
 export const transferEffect = (to, amount) => new Writer().u8(1).put(to).u128(amount).finish();
 
-/** The end of the next UTC day, as Ting ID dates what it signs. */
-export const signedExpiry = () => BigInt((Math.floor(Date.now() / 86_400_000) + 2) * 86_400);
+/**
+ * How long, in seconds, a block can include what Ting ID signs: an hour.
+ * Short on purpose. An action no block took is then over soon, and the next
+ * one takes its nonce instead of waiting behind it (expiry.js).
+ */
+export const SIGNED_LIFE = 3600;
+
+/** When what is signed now expires, in block time: `SIGNED_LIFE` from now. */
+export const signedExpiry = () => BigInt(Math.floor(Date.now() / 1000) + SIGNED_LIFE);
 
 /**
  * A coin action of an identity's slot, signed by its passkey: `10 ‖ 00 ‖

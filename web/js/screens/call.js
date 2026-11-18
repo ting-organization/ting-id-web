@@ -9,11 +9,12 @@ import * as tcr from '../../../kit/web/tcr.js';
 import { contractAccount } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
+import { callKey, callWaiting } from '../chain/expiry.js';
 import { autoFee } from '../chain/fees.js';
 import { coinMark, exactMoney as money, netTag, notices } from '../parts.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
-import { $, amount, durationWords, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
+import { $, amount, ask, durationWords, esc, icon, parseAmount, problem, short, toast, when } from '../ui.js';
 import { INSIDE_ONLY, linkFromAddress, lowercaseIds, readPayLink } from '../links.js';
 import { nextNonce, onItsWay, prefill, spendable } from './send.js';
 import { sponsor } from './sponsor.js';
@@ -197,14 +198,25 @@ export const link = {
       const take = taking(c);
       if (take?.short) return toast(`Only ${amount(take.available, c.coin.decimals)} ${c.coin.symbol} available in Spending`);
       button.disabled = true;
-      button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
       try {
         const { f, program, coin, units, fee } = c;
         const { spending } = take ?? {};
         const slot = signer.slot(0);
         const nonceBytes = await session.pool.record(program, tcr.nonceKey(slot.account));
         const nonce = nonceBytes ? new DataView(nonceBytes.buffer, nonceBytes.byteOffset).getBigUint64(0, true) : 0n;
-        const validUntil = BigInt(Math.floor(Date.now() / 1000) + 3600);
+        // Every call is signed with the nonce the chain holds for this account at the program. Of two
+        // calls to it waiting at once, then, only one can go in: said before a second one is signed.
+        const earlier = callWaiting(session.pending(), hex(program), nonce, Date.now() / 1000, session.chainTimeKnown());
+        if (earlier && !await ask({
+          title: 'Another call is still waiting',
+          text: `Your call to this program from ${when(Math.floor(earlier.at / 1000))} is still waiting for a block. Only one of the two can go in. Wait for it, or approve this one anyway.`,
+          confirm: 'Approve anyway',
+        })) {
+          button.disabled = false;
+          return;
+        }
+        button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
+        const validUntil = coins.signedExpiry();
         // The payment queues behind this browser's own payments from Spending still on their way.
         const coinNonce = spending ? nextNonce(coin.id, spending) : 0n;
         let payment = null;
@@ -214,11 +226,14 @@ export const link = {
         } else if (coin && fee) {
           payment = { coin: unhex(coin.id), coinNonce, effect: tcr.feeEffect(program), fee };
         }
-        const input = await tcr.signCall({
-          signer: slot, chain: session.chain, program, nonce, head: tcr.head(f.template, f.valueBytes), payment, validUntil,
-        });
+        const head = tcr.head(f.template, f.valueBytes);
+        const input = await tcr.signCall({ signer: slot, chain: session.chain, program, nonce, head, payment, validUntil });
         const summary = `Program call · ${short(program)}`;
-        const noted = payment ? onItsWay(coin.id, spending, coinNonce, take.need, validUntil) : { expires: Number(validUntil) };
+        // Noted with what it calls and the program's nonce it took, for the next call to this program to find it.
+        const noted = {
+          ...(payment ? onItsWay(coin.id, spending, coinNonce, take.need, validUntil) : { expires: Number(validUntil) }),
+          what: callKey(hex(program), hex(head)), program: hex(program), callNonce: nonce.toString(),
+        };
         const sent = await session.call(program, input, BUDGETS.batch, summary, { ...noted, ...(f.return ? { returnTo: f.return } : {}) });
         location.hash = `#/tx/${sent.id}`;
       } catch (err) {

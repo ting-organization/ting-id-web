@@ -79,6 +79,13 @@ sends it coins to start with; while no block has the identity yet, the same
 transaction creates it: a batch of the creation and a payment bound to it, whose
 fee pays for both.
 
+**What it signs lasts an hour.** A payment or a call that no block took within an
+hour of signing can no longer be included. The wallet goes by the chain's own time
+for that, three blocks down, and then shows it as not included, even while a node
+still holds it: the next action takes its place instead of waiting behind it. While
+one is on its way, the wallet asks before it sends the same payment again, or a
+second call to a program whose first still waits.
+
 **It trusts no node alone.** Every balance, nonce and identity record is read with
 a Merkle proof against the state root of a header the wallet checks itself: its hash
 is the tip, its proof of work holds, its chain is ours. With two or more nodes it
@@ -154,6 +161,7 @@ python3 kit/scripts/serve.py 8766            # http://127.0.0.1:8766/web/
 node kit/scripts/devchain.mjs fund <account> 10
 node scripts/test-phrase.mjs                 # recovery phrases against BIP-39, BIP-32, RFC 6979 and OpenSSL
 node scripts/test-call-links.mjs             # call and pay links read as written and as Ting ID reads them, and durations in words
+node scripts/test-expiry.mjs                 # what is signed lasts an hour, is forgotten by the chain's time, and is not sent twice unasked
 ```
 
 `reference/` holds the two reference programs the kit does not deploy,

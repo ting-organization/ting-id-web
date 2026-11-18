@@ -4,9 +4,10 @@ import { qrSvg } from '../../../kit/web/qr.js';
 import { idOf } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
+import { cannotGoIn, payKey, repeatOf } from '../chain/expiry.js';
 import { autoFee, knownFee } from '../chain/fees.js';
 import { accountBox, coinMark, exactMoney, lostWords, money, notices, who } from '../parts.js';
-import { LATE, reasonOf, session } from '../session.js';
+import { reasonOf, session } from '../session.js';
 import * as store from '../store.js';
 import { $, $$, amount, amountProblem, ask, copy, duration, esc, fractionHtml, grouped, icon, initials, linkAmount, openSheet, parseAmount, problem, short, shortAmount, toast, when } from '../ui.js';
 import { currentCoin } from './wallet.js';
@@ -265,11 +266,13 @@ export const review = {
       const button = e.currentTarget;
       const signer = session.signer();
       if (!signer) return toast('This browser can’t act for this identity yet');
+      const to = idOf(draft.to.replace(/\s+/g, ''));
+      const units = parseAmount(draft.amount, coin.decimals);
+      const what = payKey(coin.id, hex(account.account), hex(to), units);
+      if (!await sendAgain(coin.id, account, what)) return;
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
       try {
-        const to = idOf(draft.to.replace(/\s+/g, ''));
-        const units = parseAmount(draft.amount, coin.decimals);
         const slot = signer.slot(account.slot);
         const nonce = nextNonce(coin.id, account);
         const fee = account.delay ? 0n : draft.fee ?? 0n;
@@ -281,7 +284,7 @@ export const review = {
         });
         const summary = `${amount(units, coin.decimals)} ${coin.symbol} to ${who(hex(to))}`;
         const sent = await session.call(unhex(coin.id), input, BUDGETS.execute, summary,
-          onItsWay(coin.id, account, nonce, units + fee + tip, validUntil));
+          { ...onItsWay(coin.id, account, nonce, units + fee + tip, validUntil), what });
         if (account.delay) {
           // The run of the scheduled payment, handed to the node to hold until it is due.
           const notBefore = Math.floor(Date.now() / 1000) + Number(account.delay) + 30;
@@ -311,14 +314,32 @@ export const onItsWay = (coinId, account, nonce, spend, validUntil) => ({
 
 /**
  * This browser's actions of an account that a block may still include:
- * waiting, not expired, and their nonce not yet used. Once a block used it,
- * what the action takes is in what the last block read gives the account, or
- * another action took its place.
+ * waiting, not past their expiry by the clock and the chain's time
+ * (expiry.js), and their nonce not yet used. Once a block used it, what the
+ * action takes is in what the last block read gives the account, or another
+ * action took its place.
  */
 function stillOnItsWay(coinId, account) {
+  const now = Date.now() / 1000;
   return session.pending().filter((p) => p.coin === coinId && p.account === hex(account.account)
     && ['pending', 'deferred'].includes(p.state) && BigInt(p.nonce) >= account.record.nonce
-    && (p.expires != null ? Date.now() / 1000 <= p.expires + LATE : Date.now() - p.at < 2 * 86_400_000));
+    && (p.expires != null ? !cannotGoIn(p.expires, now, session.chainTimeKnown()) : Date.now() - p.at < 2 * 86_400_000));
+}
+
+/**
+ * Whether to go on with the payment `what` (expiry.js, payKey): at once
+ * when this browser has none like it on its way, and otherwise only when
+ * the user says so. The first one still goes in when its turn comes, so
+ * `again` says what a second one does: by default, pays twice.
+ */
+export async function sendAgain(coinId, account, what, again = 'If you send it again, both can go through: it would be paid twice.') {
+  const before = repeatOf(stillOnItsWay(coinId, account), what, Date.now() / 1000, session.chainTimeKnown());
+  if (!before) return true;
+  return Boolean(await ask({
+    title: 'Send it again?',
+    text: `${before.summary}, sent ${when(Math.floor(before.at / 1000))}, is still waiting for a block. ${again}`,
+    confirm: 'Send again',
+  }));
 }
 
 /** The next nonce for an account: after this browser’s own action still on its way, if any. */
@@ -357,7 +378,7 @@ export const tx = {
       <h1 class="page">Transaction</h1>
       <div class="big-amount"><span class="avatar status ${tone}">${icon(mark)}</span>
         <b class="headline">${esc(mine?.summary ?? 'A transaction')}</b><p><span class="chip ${tone}">${esc(label)}</span></p></div>
-      ${!t && !last && state === 'lost' ? `<div class="note bad">${icon('warn')}<div>${esc(mine.expires != null
+      ${!last && state === 'lost' ? `<div class="note bad">${icon('warn')}<div>${esc(mine.expires != null
     ? 'No block included it, and it can no longer be: nothing was paid or changed.'
     : `${lostWords(mine)}. Nothing in it expires, so it was not done, but could still be.`)}</div></div>` : ''}
       ${!t && !last && state === 'pending' ? `<div class="note">${icon('info')}<div>The node does not know this transaction yet. If it was just sent, give it a moment.</div></div>` : ''}
