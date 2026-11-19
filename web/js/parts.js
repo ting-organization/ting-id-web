@@ -3,6 +3,7 @@
 // in words.
 import { hex } from '../../kit/web/bytes.js';
 import { sha256 } from '../../kit/web/sha256.js';
+import { stuckWords } from './chain/waiting.js';
 import { session, slotName } from './session.js';
 import * as store from './store.js';
 import { amount, day, esc, fractionHtml, grouped, icon, initials, short, shortAmount, when } from './ui.js';
@@ -58,6 +59,11 @@ export function notices() {
   }
   if (id?.keyId != null && session.openRecoveries().length) {
     out.push(`<div class="note bad">${icon('warn')}<div>Guardians are approving a recovery of your identity. <a href="#/identity">See it on Identity</a></div></div>`);
+  }
+  // Payments that look stuck: they clear on their own, and anything signed before then only makes that later.
+  const stuck = [...session.stuck().values()];
+  if (stuck.length) {
+    out.push(`<div class="note warn">${icon('clock')}<div>${esc(stuckWords(Math.max(...stuck.map((q) => q.clearsAt)), when))}</div></div>`);
   }
   return out.join('');
 }
@@ -159,12 +165,14 @@ const STATES = {
 };
 
 /**
- * A lost transaction in words. One that expired never did anything; one
- * without an expiry (an identity call, or a run or apply handed to the node)
- * was dropped, but what it runs or applies still waits, and it could still be
- * sent again.
+ * A lost transaction in words. One that expired should never do anything:
+ * the wallet goes by the clock and a margin for a block's time, which a
+ * block stamped far behind could still beat, and a block that has it says
+ * so then. One without an expiry (an identity call, or a run or apply handed
+ * to the node) was dropped, but what it runs or applies still waits, and it
+ * could still be sent again.
  */
-export const lostWords = (p) => (p.expires != null ? 'Not included: nothing was paid or changed' : 'Dropped by the network before a block took it');
+export const lostWords = (p) => (p.expires != null ? 'Not included: it expired before a block took it' : 'Dropped by the network before a block took it');
 
 /**
  * A transaction handed to the node to hold until its time, such as the run of

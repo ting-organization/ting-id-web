@@ -79,6 +79,20 @@ sends it coins to start with; while no block has the identity yet, the same
 transaction creates it: a batch of the creation and a payment bound to it, whose
 fee pays for both.
 
+**When a payment does not go in.** Each payment from an account carries its next
+nonce, and blocks take them in order, so one that no block takes keeps the
+account's later payments waiting behind it. Payments are signed for three hours,
+calls for one, counted from the later of the device's clock and the newest block
+read from, so a slow clock signs nothing already expired. Once everything waiting
+in an account's queue has expired, and an hour more as a block's time may trail the
+clock, it is shown as not included and the next payment takes the chain's nonce
+again: nothing of the old ones can go in after it. A queue looks stuck when
+something in it has waited ten minutes for a block. The wallet then says until when
+to wait, and asks before anything more is signed into it, since that waits behind
+the rest and moves the time on. It never refuses. Before the same payment is sent,
+or the same call approved, a second time while the first still waits, the wallet
+asks; any other payment or call goes without a question.
+
 **It trusts no node alone.** Every balance, nonce and identity record is read with
 a Merkle proof against the state root of a header the wallet checks itself: its hash
 is the tip, its proof of work holds, its chain is ours. With two or more nodes it
@@ -154,6 +168,7 @@ python3 kit/scripts/serve.py 8766            # http://127.0.0.1:8766/web/
 node kit/scripts/devchain.mjs fund <account> 10
 node scripts/test-phrase.mjs                 # recovery phrases against BIP-39, BIP-32, RFC 6979 and OpenSSL
 node scripts/test-call-links.mjs             # call and pay links read as written and as Ting ID reads them, and durations in words
+node scripts/test-waiting.mjs                # three-hour expiry, when a queue looks stuck and clears, and the same payment asked about
 ```
 
 `reference/` holds the two reference programs the kit does not deploy,
