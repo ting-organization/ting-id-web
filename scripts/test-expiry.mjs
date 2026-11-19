@@ -10,7 +10,7 @@
 import { hex } from '../kit/web/bytes.js';
 import * as coins from '../web/js/chain/coins.js';
 import {
-  callKey, cannotGoIn, forgettable, heldUp, LATE, nextIn, payKey, queueOf, repeatOf, settledTime, TIME_BLOCKS, timeFrom, waiting,
+  callKey, cannotGoIn, couldGoInUntil, forgettable, heldUp, LATE, nextIn, payKey, queueOf, repeatOf, settledTime, TIME_BLOCKS, timeFrom, waiting,
 } from '../web/js/chain/expiry.js';
 import { Pool } from '../web/js/chain/pool.js';
 
@@ -186,6 +186,12 @@ const T = 1_800_000_000;
   expect('one due, handed to the node earlier', forgettable({ state: 'pending', expires: T, notBefore: T - 5 }, now), true);
   expect('not one held for a later time', forgettable({ state: 'pending', expires: T, notBefore: T + 5 }, now), false);
   expect('not one that signed no expiry, such as an identity’s change', forgettable({ state: 'pending' }, now), false);
+  // A payment an earlier version noted without an expiry holds a nonce all the same, and a queue with it
+  // is held up with no time to give (above): Settings must be able to put it away.
+  expect('a payment noted without an expiry is forgotten too', forgettable({ state: 'pending', nonce: '5' }, now), true);
+  expect('and a call', forgettable({ state: 'lost', callNonce: '7' }, now), true);
+  expect('it could go in for two days from when it was noted', couldGoInUntil({ at: T * 1000 + 999 }), T + 2 * 86_400);
+  expect('one with an expiry, until then', couldGoInUntil({ at: T * 1000, expires: T + 60 }), T + 60);
   for (const state of ['deferred', 'included', 'done', 'failed', 'dismissed']) {
     expect(`not one ${state}`, forgettable({ state, expires: T }, now), false);
   }

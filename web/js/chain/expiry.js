@@ -115,10 +115,18 @@ export function heldUp({ field, head, ahead }, now) {
 
 /**
  * What "Forget waiting transactions" puts away: the payments and calls that
- * no block has taken and the wallet still follows or shows as lost, which
- * are what signed something with an expiry. Not what a node holds for a
- * later time, such as the run of a withdrawal from Savings, which waits as
- * it should, and not an identity's change, which holds no payment back.
+ * no block has taken and the wallet still follows or shows as lost. They are
+ * what holds a nonce: what signed something with an expiry, and a payment an
+ * earlier version noted without one. Not what a node holds for a later
+ * time, such as the run of a withdrawal from Savings, which waits as it
+ * should, and not an identity's change, which holds no payment back.
  */
 export const forgettable = (p, now) =>
-  ['pending', 'lost'].includes(p.state) && p.expires != null && !(p.notBefore && p.notBefore > now);
+  ['pending', 'lost'].includes(p.state) && (p.expires != null || p.nonce != null || p.callNonce != null)
+  && !(p.notBefore && p.notBefore > now);
+
+/** How long, in seconds, a payment that an earlier version noted without an expiry could go in: it was signed until the end of the next day. */
+const UNDATED = 2 * 86_400;
+
+/** Until when a block could still include `p`, in seconds: its expiry, or `UNDATED` after it was noted. */
+export const couldGoInUntil = (p) => p.expires ?? Math.floor(p.at / 1000) + UNDATED;

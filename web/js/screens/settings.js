@@ -2,6 +2,7 @@
 import { hex, unhex } from '../../../kit/web/bytes.js';
 import { idOf } from '../../../kit/web/ting.js';
 import * as coins from '../chain/coins.js';
+import { cannotGoIn, couldGoInUntil } from '../chain/expiry.js';
 import { nodeAddress } from '../chain/net.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
@@ -109,14 +110,19 @@ export const settings = {
       const waiting = session.forgettable();
       if (!waiting.length) return toast('Nothing is waiting');
       const one = waiting.length === 1;
-      // Until when one of them could still go in: the last expiry of those not lost already.
-      const until = Math.max(0, ...waiting.filter((p) => p.state === 'pending').map((p) => p.expires));
+      // Until when one of them could still go in. Past it by the clock, one still can until the chain's time has passed it too.
+      const until = Math.max(...waiting.map(couldGoInUntil));
+      const now = Date.now() / 1000;
+      const over = cannotGoIn(until, now, now > until ? await session.chainTime() : null);
+      const still = `This cancels nothing: ${one ? 'it' : 'any of them'} may still go through`;
       const sure = await ask({
         title: 'Forget waiting transactions?',
         text: `Ting ID stops following the ${one ? 'transaction' : `${waiting.length} transactions`} that no block has taken yet, and your next one no longer waits behind ${one ? 'it' : 'them'}. ${
-          until > Date.now() / 1000
-            ? `This cancels nothing: ${one ? 'it' : 'any of them'} may still go through until ${when(until)}. If you send the same payment again before then, it could be paid twice.`
-            : `${one ? 'It has' : 'They have'} expired, so nothing of ${one ? 'it' : 'them'} can still go through.`}`,
+          over
+            ? `${one ? 'It has' : 'They have'} expired, so nothing of ${one ? 'it' : 'them'} can still go through.`
+            : until > now
+              ? `${still} until ${when(until)}. If you send the same payment again before then, it could be paid twice.`
+              : `${still} in the next few minutes. If you send the same payment again right away, it could be paid twice.`}`,
         confirm: one ? 'Forget it' : 'Forget them',
         back: one ? 'Keep it' : 'Keep them',
         danger: true,

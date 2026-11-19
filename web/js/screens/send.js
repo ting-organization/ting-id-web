@@ -4,7 +4,7 @@ import { qrSvg } from '../../../kit/web/qr.js';
 import { idOf } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
-import { heldUp, nextIn, payKey, queueOf, repeatOf } from '../chain/expiry.js';
+import { couldGoInUntil, heldUp, nextIn, payKey, queueOf, repeatOf } from '../chain/expiry.js';
 import { autoFee, knownFee } from '../chain/fees.js';
 import { accountBox, coinMark, exactMoney, lostWords, money, notices, who } from '../parts.js';
 import { reasonOf, session } from '../session.js';
@@ -324,7 +324,7 @@ export const onItsWay = (coinId, account, nonce, spend, validUntil) => ({
 function queue(coinId, account) {
   const mine = session.pending().filter((p) => p.coin === coinId && p.account === hex(account.account)
     // One noted without an expiry, by an earlier version, was signed for two days at most.
-    && (p.expires != null || Date.now() - p.at < 2 * 86_400_000));
+    && (p.expires != null || Date.now() / 1000 < couldGoInUntil(p)));
   return queueOf(mine, 'nonce', account.record.nonce, Date.now() / 1000, session.chainTimeKnown());
 }
 
