@@ -14,12 +14,13 @@ import * as coins from '../chain/coins.js';
 import { autoFee } from '../chain/fees.js';
 import { BATCH_CODE_HASH } from '../chain/net.js';
 import * as registry from '../chain/registry.js';
+import { payKey } from '../chain/waiting.js';
 import { createLink, readCreateLink } from '../links.js';
 import { coinMark, exactMoney, fingerprint, keyKind, netTag } from '../parts.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
 import { $, amount, amountProblem, duration, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
-import { nextNonce, onItsWay } from './send.js';
+import { nextNonce, onItsWay, sendAgain } from './send.js';
 
 const checked = new Map();
 
@@ -110,6 +111,12 @@ export const sponsor = {
       if (saveAs && store.get().contacts.some((x) => x.name.toLowerCase() === saveAs.toLowerCase())) return toast(`You have a contact called ${saveAs} already`);
       const signer = session.signer();
       if (!signer) return toast('This browser can’t act for this identity yet');
+      const to = registry.slotAccount(session.registry, id, 0);
+      const what = payKey(coin.id, hex(spending.account), hex(to), units);
+      // Sent twice to an identity on chain, both payments can go through. Not yet on chain, each would
+      // create it first, and the second creation fails, its payment with it.
+      if (!await sendAgain(coin.id, spending, what, exists ? undefined
+        : 'Sent again, only one of the two can go in: the identity is created only once.')) return;
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
       try {
@@ -119,13 +126,12 @@ export const sponsor = {
           toast('A block has created it meanwhile: now only the coins are sent. Check, then send.');
           return dispatchEvent(new HashChangeEvent('hashchange'));
         }
-        const to = registry.slotAccount(session.registry, id, 0);
         const nonce = nextNonce(coin.id, spending);
         const who = link.name ?? `Identity ${short(id)}`;
         const summary = `${exists ? '' : `Create ${who}, and send `}${amount(units, coin.decimals)} ${coin.symbol}${exists ? ` to ${who}` : ''}`;
         const validUntil = coins.signedExpiry();
         const pay = { chain: session.chain, coin: unhex(coin.id), signer: signer.slot(0), nonce, effect: coins.transferEffect(to, units), fee, validUntil };
-        const noted = onItsWay(coin.id, spending, nonce, units + fee, validUntil);
+        const noted = { ...onItsWay(coin.id, spending, nonce, units + fee, validUntil), what };
         let sent;
         if (exists) {
           sent = await session.call(unhex(coin.id), await coins.actionInput(pay), BUDGETS.execute, summary, noted);

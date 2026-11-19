@@ -493,7 +493,8 @@ export const session = {
     const pending = (store.get().pending ?? []).map((p) => {
       if (p.network !== this.net.key || !forgettable(p, now)) return p;
       count++;
-      return { ...p, state: 'dismissed' };
+      // Marked, so that the same payment or call made again is asked about while this one could still go in.
+      return { ...p, state: 'dismissed', forgotten: true };
     });
     if (count) store.set({ pending });
     return count;

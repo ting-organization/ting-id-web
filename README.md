@@ -84,7 +84,9 @@ nonce, and blocks take them in order, so one that no block takes keeps the
 account's later payments waiting behind it. *Forget waiting transactions* in
 Settings puts away the payments and calls no block has taken, and the next payment
 takes the chain's nonce again. It cancels nothing: the question before it says so,
-and until when they could still go through.
+and until when they could still go through. Before the same payment is sent, or the
+same call approved, a second time while the first could still go through, waiting
+or forgotten, the wallet asks; any other payment or call goes without a question.
 
 **It trusts no node alone.** Every balance, nonce and identity record is read with
 a Merkle proof against the state root of a header the wallet checks itself: its hash

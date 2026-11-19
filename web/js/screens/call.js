@@ -10,10 +10,11 @@ import { contractAccount } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
 import { autoFee } from '../chain/fees.js';
+import { approveAgainWords, callKey, repeatOf } from '../chain/waiting.js';
 import { coinMark, exactMoney as money, netTag, notices } from '../parts.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
-import { $, amount, durationWords, esc, icon, parseAmount, problem, short, toast } from '../ui.js';
+import { $, amount, ask, durationWords, esc, icon, parseAmount, problem, short, toast, when } from '../ui.js';
 import { INSIDE_ONLY, linkFromAddress, lowercaseIds, readPayLink } from '../links.js';
 import { nextNonce, onItsWay, prefill, spendable } from './send.js';
 import { sponsor } from './sponsor.js';
@@ -197,13 +198,21 @@ export const link = {
       const take = taking(c);
       if (take?.short) return toast(`Only ${amount(take.available, c.coin.decimals)} ${c.coin.symbol} available in Spending`);
       button.disabled = true;
-      button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
       try {
         const { f, program, coin, units, fee } = c;
         const { spending } = take ?? {};
         const slot = signer.slot(0);
         const nonceBytes = await session.pool.record(program, tcr.nonceKey(slot.account));
         const nonce = nonceBytes ? new DataView(nonceBytes.buffer, nonceBytes.byteOffset).getBigUint64(0, true) : 0n;
+        const head = tcr.head(f.template, f.valueBytes);
+        const what = callKey(hex(program), hex(slot.account), hex(head));
+        // The same call approved again is asked about first; any other call goes as it always does.
+        const before = repeatOf(session.pending(), what, Date.now() / 1000, (p) => p.callNonce != null && BigInt(p.callNonce) < nonce);
+        if (before && !await ask({ title: 'Approve it again?', text: approveAgainWords(before, when), confirm: 'Approve again' })) {
+          button.disabled = false;
+          return;
+        }
+        button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
         const validUntil = BigInt(Math.floor(Date.now() / 1000) + 3600);
         // The payment queues behind this browser's own payments from Spending still on their way.
         const coinNonce = spending ? nextNonce(coin.id, spending) : 0n;
@@ -214,11 +223,13 @@ export const link = {
         } else if (coin && fee) {
           payment = { coin: unhex(coin.id), coinNonce, effect: tcr.feeEffect(program), fee };
         }
-        const input = await tcr.signCall({
-          signer: slot, chain: session.chain, program, nonce, head: tcr.head(f.template, f.valueBytes), payment, validUntil,
-        });
+        const input = await tcr.signCall({ signer: slot, chain: session.chain, program, nonce, head, payment, validUntil });
         const summary = `Program call · ${short(program)}`;
-        const noted = payment ? onItsWay(coin.id, spending, coinNonce, take.need, validUntil) : { expires: Number(validUntil) };
+        // Noted with what it calls and the program's nonce it took, so that the same call made again is asked about.
+        const noted = {
+          ...(payment ? onItsWay(coin.id, spending, coinNonce, take.need, validUntil) : { expires: Number(validUntil) }),
+          what, callNonce: nonce.toString(),
+        };
         const sent = await session.call(program, input, BUDGETS.batch, summary, { ...noted, ...(f.return ? { returnTo: f.return } : {}) });
         location.hash = `#/tx/${sent.id}`;
       } catch (err) {
