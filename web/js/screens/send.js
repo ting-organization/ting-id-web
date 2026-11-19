@@ -389,7 +389,7 @@ export const tx = {
       <div class="big-amount"><span class="avatar status ${tone}">${icon(mark)}</span>
         <b class="headline">${esc(mine?.summary ?? 'A transaction')}</b><p><span class="chip ${tone}">${esc(label)}</span></p></div>
       ${!last && state === 'lost' ? `<div class="note bad">${icon('warn')}<div>${esc(mine.expires != null
-    ? 'No block included it, and it can no longer be: nothing was paid or changed.'
+    ? 'No block took it before it expired, so it should not go through.'
     : `${lostWords(mine)}. Nothing in it expires, so it was not done, but could still be.`)}</div></div>` : ''}
       ${!t && !last && state === 'pending' ? `<div class="note">${icon('info')}<div>The node does not know this transaction yet. If it was just sent, give it a moment.</div></div>` : ''}
       ${state === 'failed' ? `<div class="note bad">${icon('warn')}<div>${esc(reasonOf(last.receipt))}</div></div>` : ''}

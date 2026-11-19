@@ -165,12 +165,14 @@ const STATES = {
 };
 
 /**
- * A lost transaction in words. One that expired never did anything; one
- * without an expiry (an identity call, or a run or apply handed to the node)
- * was dropped, but what it runs or applies still waits, and it could still be
- * sent again.
+ * A lost transaction in words. One that expired should never do anything:
+ * the wallet goes by the clock and a margin for a block's time, which a
+ * block stamped far behind could still beat, and a block that has it says
+ * so then. One without an expiry (an identity call, or a run or apply handed
+ * to the node) was dropped, but what it runs or applies still waits, and it
+ * could still be sent again.
  */
-export const lostWords = (p) => (p.expires != null ? 'Not included: nothing was paid or changed' : 'Dropped by the network before a block took it');
+export const lostWords = (p) => (p.expires != null ? 'Not included: it expired before a block took it' : 'Dropped by the network before a block took it');
 
 /**
  * A transaction handed to the node to hold until its time, such as the run of
