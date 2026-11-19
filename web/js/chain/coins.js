@@ -51,16 +51,24 @@ export const transferEffect = (to, amount) => new Writer().u8(1).put(to).u128(am
  */
 export const SIGNED_LIFE = 3 * 3600;
 
+/** How far, in seconds, ahead of the device's clock a block's time is believed when an expiry is counted: a day. */
+export const BLOCK_AHEAD = 86_400;
+
 /**
  * When what is signed now expires, in block time: `life` seconds from now.
  * Now is the later of this device's clock and `tipTime`, the timestamp of the
  * newest block the wallet read from (seconds, or null): a block takes the
  * action while its own timestamp is not past the expiry, so a clock that runs
  * hours slow, as one set by hand in the wrong time zone does, would otherwise
- * sign what has expired on arrival.
+ * sign what has expired on arrival. A block is believed up to BLOCK_AHEAD past
+ * the clock, no further: nodes take no block stamped far ahead of their own
+ * clocks, so more than that is a device set days back, or nodes making it up.
  */
-export const signedExpiry = (tipTime = null, life = SIGNED_LIFE) =>
-  BigInt(Math.max(Math.floor(Date.now() / 1000), Number.isSafeInteger(tipTime) ? tipTime : 0) + life);
+export function signedExpiry(tipTime = null, life = SIGNED_LIFE) {
+  const clock = Math.floor(Date.now() / 1000);
+  const tip = Number.isSafeInteger(tipTime) ? Math.min(tipTime, clock + BLOCK_AHEAD) : 0;
+  return BigInt(Math.max(clock, tip) + life);
+}
 
 /**
  * A coin action of an identity's slot, signed by its passkey: `10 ‖ 00 ‖

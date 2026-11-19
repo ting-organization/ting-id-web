@@ -5,7 +5,7 @@
 // web/js/chain/coins.js).
 //
 //   node scripts/test-waiting.mjs
-import { SIGNED_LIFE, signedExpiry } from '../web/js/chain/coins.js';
+import { BLOCK_AHEAD, SIGNED_LIFE, signedExpiry } from '../web/js/chain/coins.js';
 import {
   approveAgainWords, callKey, clearsAt, couldGoInUntil, LATE, payKey, queueKey, repeatOf, sendAgainWords, STUCK_AFTER, stuckQueues,
   stuckWords, waitWords,
@@ -38,6 +38,7 @@ const payment = (nonce, ago, extra = {}) => ({
     expect('from the clock, when the block is older', signedExpiry(now - 600), BigInt(now + SIGNED_LIFE));
     expect('no block read yet', signedExpiry(null), BigInt(now + SIGNED_LIFE));
     expect('a call, an hour', signedExpiry(null, 3600), BigInt(now + 3600));
+    expect('a block a week ahead is believed a day', signedExpiry(now + 7 * 86_400), BigInt(now + BLOCK_AHEAD + SIGNED_LIFE));
   } finally {
     Date.now = realNow;
   }
