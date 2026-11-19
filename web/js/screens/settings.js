@@ -3,9 +3,10 @@ import { hex, unhex } from '../../../kit/web/bytes.js';
 import { idOf } from '../../../kit/web/ting.js';
 import * as coins from '../chain/coins.js';
 import { nodeAddress } from '../chain/net.js';
+import { forgetWords } from '../chain/waiting.js';
 import { session } from '../session.js';
 import * as store from '../store.js';
-import { $, $$, ask, esc, icon, problem, short, toast } from '../ui.js';
+import { $, $$, ask, esc, icon, problem, short, toast, when } from '../ui.js';
 
 export function applyTheme() {
   const theme = store.get().theme ?? 'system';
@@ -49,6 +50,7 @@ export const settings = {
       <div class="card"><div class="field"><div class="seg">${['system', 'light', 'dark'].map((t) => `<button data-theme="${t}" class="${t === theme ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div></div></div>
       ${saved ? `<h2 class="section">This browser</h2>
       <div class="card pad stack"><p class="muted">This browser keeps ${esc(saved.name)}’s identity ID, contacts and activity, all public. The key is your passkey’s; the identity is on chain.</p>
+        <button class="btn secondary" data-forget-waiting>Forget waiting transactions</button>
         <button class="btn danger" data-forget>Forget this identity here</button></div>` : ''}
       <h2 class="section">About</h2>
       <div class="card"><div class="kv"><span>Ting ID Web</span><span>0.1.0</span></div>
@@ -102,6 +104,23 @@ export const settings = {
       await session.refresh(true);
       dispatchEvent(new HashChangeEvent('hashchange'));
     }));
+    // A way out when something sent does not go in and holds what comes after it. It cancels nothing,
+    // so the question says what it does, and what a payment made again afterwards can lead to.
+    $('[data-forget-waiting]', view)?.addEventListener('click', async () => {
+      const waiting = session.forgettable();
+      if (!waiting.length) return toast('Nothing is waiting');
+      const one = waiting.length === 1;
+      const sure = await ask({
+        title: 'Forget waiting transactions?',
+        text: forgetWords(waiting, Date.now() / 1000, when),
+        confirm: one ? 'Forget it' : 'Forget them',
+        back: one ? 'Keep it' : 'Keep them',
+        danger: true,
+      });
+      if (!sure) return;
+      const count = session.forgetWaiting();
+      toast(count === 1 ? 'Forgot 1 waiting transaction' : `Forgot ${count} waiting transactions`);
+    });
     $('[data-forget]', view)?.addEventListener('click', async () => {
       const sure = await ask({ title: 'Forget this identity here?', text: 'It stays on chain, and your passkey can open it again: Use an existing identity, then With a passkey.', confirm: 'Forget it', back: 'Keep it', danger: true });
       if (!sure) return;

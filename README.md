@@ -79,6 +79,13 @@ sends it coins to start with; while no block has the identity yet, the same
 transaction creates it: a batch of the creation and a payment bound to it, whose
 fee pays for both.
 
+**When a payment does not go in.** Each payment from an account carries its next
+nonce, and blocks take them in order, so one that no block takes keeps the
+account's later payments waiting behind it. *Forget waiting transactions* in
+Settings puts away the payments and calls no block has taken, and the next payment
+takes the chain's nonce again. It cancels nothing: the question before it says so,
+and until when they could still go through.
+
 **It trusts no node alone.** Every balance, nonce and identity record is read with
 a Merkle proof against the state root of a header the wallet checks itself: its hash
 is the tip, its proof of work holds, its chain is ours. With two or more nodes it
@@ -154,6 +161,7 @@ python3 kit/scripts/serve.py 8766            # http://127.0.0.1:8766/web/
 node kit/scripts/devchain.mjs fund <account> 10
 node scripts/test-phrase.mjs                 # recovery phrases against BIP-39, BIP-32, RFC 6979 and OpenSSL
 node scripts/test-call-links.mjs             # call and pay links read as written and as Ting ID reads them, and durations in words
+node scripts/test-waiting.mjs                # what Forget waiting transactions puts away, and the question before it
 ```
 
 `reference/` holds the two reference programs the kit does not deploy,

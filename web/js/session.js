@@ -10,6 +10,7 @@ import { networks, POLICY_CODE_HASH } from './chain/net.js';
 import { Pool } from './chain/pool.js';
 import * as registry from './chain/registry.js';
 import { identitySigner } from './chain/signer.js';
+import { forgettable, LATE } from './chain/waiting.js';
 import * as store from './store.js';
 import { short } from './ui.js';
 
@@ -18,8 +19,6 @@ const SLOT_NAMES = ['Spending', 'Savings'];
 /** A day, in ms: the longest a node keeps a transaction in its pool (POOL_AGE). */
 const DAY = 86_400_000;
 
-/** How far, in seconds, a block's time may trail the clock: it only has to pass the median of the blocks before it. */
-export const LATE = 3600;
 export const slotName = (n) => SLOT_NAMES[Number(n)] ?? `Account ${Number(n) + 1}`;
 
 /** What this browser calls the identity `g` (hex), as a guardian: its contact's name, else its short ID. */
@@ -472,6 +471,32 @@ export const session = {
 
   dismiss(id) {
     store.set({ pending: (store.get().pending ?? []).map((p) => (p.id === id ? { ...p, state: 'dismissed' } : p)) });
+  },
+
+  /** What "Forget waiting transactions" would put away on this network (waiting.js, forgettable). */
+  forgettable() {
+    const now = Date.now() / 1000;
+    return this.pending().filter((p) => forgettable(p, now));
+  },
+
+  /**
+   * Puts away everything on this network that no block has taken, and gives
+   * how many: the wallet stops following them and sending them again, and
+   * they no longer hold a nonce or what they would spend. Nothing is
+   * cancelled by it: one that a block can still include may go in all the
+   * same, which Settings says before it asks. What a node holds for a later
+   * time stays, and so does an identity's change.
+   */
+  forgetWaiting() {
+    const now = Date.now() / 1000;
+    let count = 0;
+    const pending = (store.get().pending ?? []).map((p) => {
+      if (p.network !== this.net.key || !forgettable(p, now)) return p;
+      count++;
+      return { ...p, state: 'dismissed' };
+    });
+    if (count) store.set({ pending });
+    return count;
   },
 };
 
