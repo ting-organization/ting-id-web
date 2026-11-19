@@ -16,8 +16,11 @@ import { session } from '../session.js';
 import * as store from '../store.js';
 import { $, amount, ask, durationWords, esc, icon, parseAmount, problem, short, toast, when } from '../ui.js';
 import { INSIDE_ONLY, linkFromAddress, lowercaseIds, readPayLink } from '../links.js';
-import { nextNonce, onItsWay, prefill, spendable } from './send.js';
+import { nextNonce, onItsWay, prefill, spendable, waitFirst } from './send.js';
 import { sponsor } from './sponsor.js';
+
+/** How long, in seconds, a call may wait to get in (TCR-1: at most an hour). */
+const CALL_LIFE = 3600;
 
 /** Reference programs: a call link never names one of these as its program. */
 const REFERENCE_CODES = new Set([
@@ -204,6 +207,12 @@ export const link = {
         const slot = signer.slot(0);
         const nonceBytes = await session.pool.record(program, tcr.nonceKey(slot.account));
         const nonce = nonceBytes ? new DataView(nonceBytes.buffer, nonceBytes.byteOffset).getBigUint64(0, true) : 0n;
+        // A call that pays from Spending queues behind its payments: behind one that looks stuck, asked about first.
+        const pays = Boolean(spending && (f.burn || f.to || (coin && fee)));
+        if (pays && !await waitFirst(coin.id, spending)) {
+          button.disabled = false;
+          return;
+        }
         const head = tcr.head(f.template, f.valueBytes);
         const what = callKey(hex(program), hex(slot.account), hex(head));
         // The same call approved again is asked about first; any other call goes as it always does.
@@ -213,7 +222,7 @@ export const link = {
           return;
         }
         button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
-        const validUntil = BigInt(Math.floor(Date.now() / 1000) + 3600);
+        const validUntil = coins.signedExpiry(session.tipTime(), CALL_LIFE);
         // The payment queues behind this browser's own payments from Spending still on their way.
         const coinNonce = spending ? nextNonce(coin.id, spending) : 0n;
         let payment = null;

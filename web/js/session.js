@@ -10,7 +10,7 @@ import { networks, POLICY_CODE_HASH } from './chain/net.js';
 import { Pool } from './chain/pool.js';
 import * as registry from './chain/registry.js';
 import { identitySigner } from './chain/signer.js';
-import { forgettable, LATE } from './chain/waiting.js';
+import { clearsAt, LATE, stuckQueues } from './chain/waiting.js';
 import * as store from './store.js';
 import { short } from './ui.js';
 
@@ -451,9 +451,12 @@ export const session = {
         continue;
       }
       const last = t.occurrences?.at(-1);
+      // Cleared (waiting.js): past its expiry, and as long again as a block's time may trail the clock, no
+      // block can take it, though a node may still hold it. It is lost, and only a block that has it says otherwise.
+      const cleared = !last && p.expires != null && Date.now() / 1000 > clearsAt(p);
       const next = last
         ? (last.receipt.status === 0 ? (this.status.height - last.height >= 2 ? 'done' : 'included') : 'failed')
-        : t.deferred ? 'deferred' : 'pending';
+        : cleared ? 'lost' : t.deferred ? 'deferred' : 'pending';
       if (next !== p.state || (last && p.height !== last.height)) {
         p.state = next;
         p.height = last?.height;
@@ -473,31 +476,18 @@ export const session = {
     store.set({ pending: (store.get().pending ?? []).map((p) => (p.id === id ? { ...p, state: 'dismissed' } : p)) });
   },
 
-  /** What "Forget waiting transactions" would put away on this network (waiting.js, forgettable). */
-  forgettable() {
-    const now = Date.now() / 1000;
-    return this.pending().filter((p) => forgettable(p, now));
+  /**
+   * The time by the newest block the wallet read from, in seconds, or null
+   * before the first read: what is signed expires counted from the later of
+   * this and the device's clock (coins.signedExpiry). Nothing is asked for it.
+   */
+  tipTime() {
+    return this.pool?.tipTime?.() ?? null;
   },
 
-  /**
-   * Puts away everything on this network that no block has taken, and gives
-   * how many: the wallet stops following them and sending them again, and
-   * they no longer hold a nonce or what they would spend. Nothing is
-   * cancelled by it: one that a block can still include may go in all the
-   * same, which Settings says before it asks. What a node holds for a later
-   * time stays, and so does an identity's change.
-   */
-  forgetWaiting() {
-    const now = Date.now() / 1000;
-    let count = 0;
-    const pending = (store.get().pending ?? []).map((p) => {
-      if (p.network !== this.net.key || !forgettable(p, now)) return p;
-      count++;
-      // Marked, so that the same payment or call made again is asked about while this one could still go in.
-      return { ...p, state: 'dismissed', forgotten: true };
-    });
-    if (count) store.set({ pending });
-    return count;
+  /** The queues of this browser's payments that look stuck now (waiting.js, stuckQueues), by queueKey. */
+  stuck() {
+    return stuckQueues(this.pending(), Date.now() / 1000);
   },
 };
 

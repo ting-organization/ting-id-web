@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// What "Forget waiting transactions" in Settings puts away, and what the
-// question before it says (web/js/chain/waiting.js).
+// What this browser sent and no block has taken yet: how long what it signs
+// lasts, when an account's queue looks stuck and when it clears, and the
+// payment or call a new one would repeat (web/js/chain/waiting.js,
+// web/js/chain/coins.js).
 //
 //   node scripts/test-waiting.mjs
+import { SIGNED_LIFE, signedExpiry } from '../web/js/chain/coins.js';
 import {
-  approveAgainWords, callKey, couldGoInUntil, forgettable, forgetWords, LATE, payKey, repeatOf, sendAgainWords,
+  approveAgainWords, callKey, clearsAt, couldGoInUntil, LATE, payKey, queueKey, repeatOf, sendAgainWords, STUCK_AFTER, stuckQueues,
+  stuckWords, waitWords,
 } from '../web/js/chain/waiting.js';
 
 let failed = 0;
@@ -16,58 +20,69 @@ function expect(what, got, want) {
 }
 
 const now = 1_800_000_000;
-const at = (now - 600) * 1000;
-const payment = { state: 'pending', at, coin: 'c0', account: 'a1', nonce: '4', spend: '100', expires: now + 3600 };
+const ms = (seconds) => seconds * 1000;
 const when = (seconds) => `T${seconds}`;
+/** A payment from account a1 in coin c0, sent `ago` seconds before now. */
+const payment = (nonce, ago, extra = {}) => ({
+  state: 'pending', at: ms(now - ago), coin: 'c0', account: 'a1', nonce: String(nonce), spend: '100', expires: now - ago + SIGNED_LIFE, ...extra,
+});
 
-// What holds a payment back is put away, wherever it stands short of a block.
+// What is signed lasts three hours, counted from the later of the clock and the newest block read from.
 {
-  expect('a waiting payment', forgettable(payment, now), true);
-  expect('a lost payment', forgettable({ ...payment, state: 'lost' }, now), true);
-  expect('a call without a payment', forgettable({ state: 'pending', at, expires: now + 3600 }, now), true);
-  expect('a payment noted without an expiry', forgettable({ ...payment, expires: undefined }, now), true);
-  for (const state of ['included', 'done', 'failed', 'deferred', 'dismissed']) {
-    expect(`a payment ${state}`, forgettable({ ...payment, state }, now), false);
+  const realNow = Date.now;
+  Date.now = () => ms(now);
+  try {
+    expect('three hours', SIGNED_LIFE, 3 * 3600);
+    expect('from the clock', signedExpiry(), BigInt(now + SIGNED_LIFE));
+    expect('from a newer block, when the clock is slow', signedExpiry(now + 7200), BigInt(now + 7200 + SIGNED_LIFE));
+    expect('from the clock, when the block is older', signedExpiry(now - 600), BigInt(now + SIGNED_LIFE));
+    expect('no block read yet', signedExpiry(null), BigInt(now + SIGNED_LIFE));
+    expect('a call, an hour', signedExpiry(null, 3600), BigInt(now + 3600));
+  } finally {
+    Date.now = realNow;
   }
 }
 
-// What holds no payment back stays: an identity's change, and the run of a withdrawal from Savings.
+// When one is cleared: past its expiry, and an hour more, as a block's time may trail the clock.
 {
-  expect('an identity change', forgettable({ state: 'pending', at }, now), false);
-  expect('a change held for later', forgettable({ state: 'pending', at, notBefore: now + 600, tag: 'apply' }, now), false);
-  expect('a run held for later', forgettable({ state: 'pending', at, notBefore: now + 120, runOf: 'c0:a1:4' }, now), false);
-  expect('a run come due', forgettable({ state: 'pending', at, notBefore: now - 10, runOf: 'c0:a1:4' }, now), false);
-  expect('a payment held for later', forgettable({ ...payment, notBefore: now + 120 }, now), false);
+  expect('with an expiry', clearsAt(payment(4, 0)), now + SIGNED_LIFE + LATE);
+  expect('one of an earlier version, without', couldGoInUntil({ ...payment(4, 0), expires: undefined }), now + 2 * 86_400);
 }
 
-// Until when one could still go in: its expiry, or two days after it was noted.
+// A queue looks stuck once something in it has waited ten minutes without a block.
 {
-  expect('with an expiry', couldGoInUntil(payment), now + 3600);
-  expect('without one', couldGoInUntil({ ...payment, expires: undefined }), now - 600 + 2 * 86_400);
+  const key = queueKey('c0', 'a1');
+  expect('just sent', stuckQueues([payment(4, 60)], now).size, 0);
+  expect('nine minutes', stuckQueues([payment(4, STUCK_AFTER - 60)], now).size, 0);
+  const stuck = stuckQueues([payment(4, STUCK_AFTER)], now).get(key);
+  expect('ten minutes', stuck?.since, now - STUCK_AFTER);
+
+  // It clears when the last of what waits in it does: what was signed behind the stuck one moves that on.
+  const queue = stuckQueues([payment(4, 1800), payment(5, 900), payment(6, 30)], now).get(key);
+  expect('since the oldest', queue.since, now - 1800);
+  expect('cleared with the newest', queue.clearsAt, now - 30 + SIGNED_LIFE + LATE);
+
+  // Only what still waits for a block counts.
+  for (const state of ['included', 'done', 'failed', 'lost', 'dismissed', 'deferred']) {
+    expect(`one ${state}`, stuckQueues([payment(4, 1800, { state })], now).size, 0);
+  }
+  expect('held by a node for later', stuckQueues([payment(4, 1800, { notBefore: now + 600 })], now).size, 0);
+  expect('cleared already', stuckQueues([payment(4, SIGNED_LIFE + LATE + 1)], now).size, 0);
+  expect('nothing of an account', stuckQueues([{ state: 'pending', at: ms(now - 1800), expires: now + 3600 }], now).size, 0);
+
+  // Each account in each coin is a queue of its own.
+  const two = stuckQueues([payment(4, 1800), payment(9, 30, { account: 'a2' })], now);
+  expect('the stuck account', two.has(key), true);
+  expect('another account', two.has(queueKey('c0', 'a2')), false);
 }
 
-// The question says until when one may still go through: the last expiry, and as long again as a
-// block's time may trail the clock. Past that, that they have expired.
+// What it says: how long it has waited, and until when to wait.
 {
-  const one = forgetWords([payment], now, when);
-  expect('one: what it does', one.startsWith('Ting ID stops following the transaction that no block has taken yet, and your next one no longer waits behind it.'), true);
-  expect('one: until when', one.includes(`This cancels nothing: it may still go through until about T${now + 3600 + LATE}.`), true);
-  expect('one: paid twice', one.endsWith('If you send the same payment again before then, it could be paid twice.'), true);
-
-  const later = { ...payment, nonce: '5', expires: now + 7200 };
-  const two = forgetWords([payment, later], now, when);
-  expect('two: how many', two.includes('the 2 transactions that no block has taken yet') && two.includes('waits behind them.'), true);
-  expect('two: the last of them', two.includes(`any of them may still go through until about T${now + 7200 + LATE}.`), true);
-
-  const lastMoment = now + 3600 + LATE;
-  expect('at the last moment', forgetWords([payment], lastMoment, when).includes('may still go through'), true);
-  const over = forgetWords([payment], lastMoment + 1, when);
-  expect('one: expired', over.endsWith('It has expired, so nothing of it can still go through.'), true);
-  expect('one: expired, nothing about paying twice', over.includes('paid twice'), false);
-  expect('two: expired', forgetWords([payment, payment], lastMoment + 1, when).endsWith('They have expired, so nothing of them can still go through.'), true);
-
-  const undated = { ...payment, expires: undefined };
-  expect('undated: two days after it was noted', forgetWords([undated], now, when).includes(`until about T${now - 600 + 2 * 86_400 + LATE}.`), true);
+  expect('the question', waitWords({ since: now - 1500, clearsAt: now + 9000 }, now, when),
+    `A transaction from this account has waited 25 minutes for a block. Anything you sign now waits behind it, and makes the wait longer. Everything waiting should be cleared by about T${now + 9000}.`);
+  expect('in hours', waitWords({ since: now - 3 * 3600, clearsAt: now }, now, when).includes('has waited 3 hours for a block'), true);
+  expect('the note', stuckWords(now + 9000, when),
+    `Some transactions look stuck. Wait until about T${now + 9000}, when they are cleared. Signing more before then makes the wait longer.`);
 }
 
 // Only the same payment counts as a repeat: same coin, account, recipient and amount.
@@ -75,42 +90,34 @@ const when = (seconds) => `T${seconds}`;
   expect('a payment key', payKey('c0', 'a1', 'b2', 100n), 'pay:c0:a1:b2:100');
   expect('a call key', callKey('p0', 'a1', 'h2'), 'call:p0:a1:h2');
   const what = payKey('c0', 'a1', 'b2', 100n);
-  const sent = { ...payment, what, summary: '1 DLR to Bo' };
+  const sent = { ...payment(4, 600), what, summary: '1 DLR to Bo' };
   expect('the same payment waiting', repeatOf([sent], what, now), sent);
   expect('another amount', repeatOf([sent], payKey('c0', 'a1', 'b2', 101n), now), undefined);
   expect('another recipient', repeatOf([sent], payKey('c0', 'a1', 'b3', 100n), now), undefined);
-  expect('one noted without what it was', repeatOf([{ ...payment, summary: '1 DLR to Bo' }], what, now), undefined);
+  expect('one noted without what it was', repeatOf([{ ...payment(4, 600), summary: '1 DLR to Bo' }], what, now), undefined);
   const held = { ...sent, state: 'deferred' };
   expect('held by the node for later', repeatOf([held], what, now), held);
-  for (const state of ['included', 'done', 'failed', 'lost']) expect(`one ${state}`, repeatOf([{ ...sent, state }], what, now), undefined);
-  expect('one put away by hand', repeatOf([{ ...sent, state: 'dismissed' }], what, now), undefined);
-
-  // Forgotten in Settings, it still counts until its time has run out, and a block's time may trail the clock.
-  const forgotten = { ...sent, state: 'dismissed', forgotten: true };
-  expect('forgotten, in time', repeatOf([forgotten], what, now), forgotten);
-  expect('forgotten, at the last moment', repeatOf([forgotten], what, now + 3600 + LATE), forgotten);
-  expect('forgotten, past it', repeatOf([forgotten], what, now + 3600 + LATE + 1), undefined);
-  expect('waiting, past it', repeatOf([sent], what, now + 3600 + LATE + 1), undefined);
+  for (const state of ['included', 'done', 'failed', 'lost', 'dismissed']) expect(`one ${state}`, repeatOf([{ ...sent, state }], what, now), undefined);
+  expect('cleared', repeatOf([sent], what, clearsAt(sent) + 1), undefined);
 
   // One whose nonce the chain has passed went in or lost its place: no second one.
   const passed = (p) => BigInt(p.nonce) < 5n;
   expect('its nonce passed', repeatOf([sent], what, now, passed), undefined);
   expect('its nonce not passed', repeatOf([{ ...sent, nonce: '5' }], what, now, passed)?.nonce, '5');
 
-  const newer = { ...sent, at: at + 60_000, nonce: '5' };
+  const newer = { ...sent, at: sent.at + 60_000, nonce: '5' };
   expect('the newest of them', repeatOf([sent, newer], what, now), newer);
 }
 
-// The questions say where the first one stands, and what a second one does.
+// The repeat questions say when the first was sent, and what a second one does.
 {
-  const sent = { ...payment, at, summary: '1 DLR to Bo' };
-  const sentAt = Math.floor(at / 1000);
-  expect('waiting', sendAgainWords(sent, when), `1 DLR to Bo is still waiting for a block (sent T${sentAt}). If you send it again, it could be paid twice.`);
-  expect('forgotten', sendAgainWords({ ...sent, state: 'dismissed', forgotten: true }, when),
-    `1 DLR to Bo was forgotten in Settings (sent T${sentAt}), but could still go through until about T${now + 3600 + LATE}. If you send it again, it could be paid twice.`);
-  expect('only one can go in', sendAgainWords(sent, when, 'Sent again, only one of the two can go in.').endsWith('(sent T' + sentAt + '). Sent again, only one of the two can go in.'), true);
-  expect('a call', approveAgainWords({ state: 'pending', at, expires: now + 3600 }, when),
-    `You approved this call before, and it is still waiting for a block (sent T${sentAt}). Approved again, only one of the two can go in.`);
+  const sent = { ...payment(4, 600), summary: '1 DLR to Bo' };
+  const sentAt = now - 600;
+  expect('a payment', sendAgainWords(sent, when), `1 DLR to Bo is still waiting for a block (sent T${sentAt}). If you send it again, it could be paid twice.`);
+  expect('only one can go in', sendAgainWords(sent, when, 'Sent again, only one of the two can go in.'),
+    `1 DLR to Bo is still waiting for a block (sent T${sentAt}). Sent again, only one of the two can go in.`);
+  expect('a call', approveAgainWords({ state: 'pending', at: ms(sentAt), expires: now + 3600 }, when),
+    `You approved this call at T${sentAt}, and it is still waiting for a block. Approved again, only one of the two can go in.`);
 }
 
 if (failed) {

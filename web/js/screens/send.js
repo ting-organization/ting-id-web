@@ -5,7 +5,7 @@ import { idOf } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as coins from '../chain/coins.js';
 import { autoFee, knownFee } from '../chain/fees.js';
-import { LATE, payKey, repeatOf, sendAgainWords } from '../chain/waiting.js';
+import { LATE, payKey, queueKey, repeatOf, sendAgainWords, waitWords } from '../chain/waiting.js';
 import { accountBox, coinMark, exactMoney, lostWords, money, notices, who } from '../parts.js';
 import { reasonOf, session } from '../session.js';
 import * as store from '../store.js';
@@ -269,7 +269,7 @@ export const review = {
       const to = idOf(draft.to.replace(/\s+/g, ''));
       const units = parseAmount(draft.amount, coin.decimals);
       const what = payKey(coin.id, hex(account.account), hex(to), units);
-      if (!await sendAgain(coin.id, account, what)) return;
+      if (!await waitFirst(coin.id, account) || !await sendAgain(coin.id, account, what)) return;
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span> Waiting for your passkey';
       try {
@@ -277,7 +277,7 @@ export const review = {
         const nonce = nextNonce(coin.id, account);
         const fee = account.delay ? 0n : draft.fee ?? 0n;
         const tip = account.delay ? draft.runFee ?? 0n : 0n;
-        const validUntil = coins.signedExpiry();
+        const validUntil = coins.signedExpiry(session.tipTime());
         const input = await coins.actionInput({
           chain: session.chain, coin: unhex(coin.id), signer: slot, nonce,
           effect: coins.transferEffect(to, units), fee, tip, validUntil,
@@ -322,6 +322,20 @@ function stillOnItsWay(coinId, account) {
   return session.pending().filter((p) => p.coin === coinId && p.account === hex(account.account)
     && ['pending', 'deferred'].includes(p.state) && BigInt(p.nonce) >= account.record.nonce
     && (p.expires != null ? Date.now() / 1000 <= p.expires + LATE : Date.now() - p.at < 2 * 86_400_000));
+}
+
+/**
+ * Whether to go on signing into the queue of `account` in a coin: at once
+ * unless it looks stuck (waiting.js, stuckQueues), and otherwise only when
+ * the person says so. Waiting is the answer a dismissed question gives: what
+ * is signed now waits behind the stuck one and moves the time it clears on.
+ */
+export async function waitFirst(coinId, account) {
+  const stuck = session.stuck().get(queueKey(coinId, hex(account.account)));
+  if (!stuck) return true;
+  return Boolean(await ask({
+    title: 'Transactions look stuck', text: waitWords(stuck, Date.now() / 1000, when), confirm: 'Sign anyway', back: 'Wait', danger: true,
+  }));
 }
 
 /**
@@ -374,7 +388,7 @@ export const tx = {
       <h1 class="page">Transaction</h1>
       <div class="big-amount"><span class="avatar status ${tone}">${icon(mark)}</span>
         <b class="headline">${esc(mine?.summary ?? 'A transaction')}</b><p><span class="chip ${tone}">${esc(label)}</span></p></div>
-      ${!t && !last && state === 'lost' ? `<div class="note bad">${icon('warn')}<div>${esc(mine.expires != null
+      ${!last && state === 'lost' ? `<div class="note bad">${icon('warn')}<div>${esc(mine.expires != null
     ? 'No block included it, and it can no longer be: nothing was paid or changed.'
     : `${lostWords(mine)}. Nothing in it expires, so it was not done, but could still be.`)}</div></div>` : ''}
       ${!t && !last && state === 'pending' ? `<div class="note">${icon('info')}<div>The node does not know this transaction yet. If it was just sent, give it a moment.</div></div>` : ''}

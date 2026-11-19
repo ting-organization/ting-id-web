@@ -26,6 +26,8 @@ export class Pool {
     this.headers = new Map();
     this.confirmed = new Set();
     this.best = null;
+    /** The header of the newest block a checked read came from (tipTime). */
+    this.newest = null;
   }
 
   async request(node, path, body) {
@@ -130,6 +132,7 @@ export class Pool {
       if (!(await this.confirm(node, answer.tip, Number(header.height)))) {
         throw new NodeError('No other node has the block this answer comes from yet.');
       }
+      if (!this.newest || header.height > this.newest.height) this.newest = header;
       const root = unhex(answer.state_root);
       answer.values.forEach((v, j) => {
         const [contract, key] = part[j];
@@ -145,6 +148,16 @@ export class Pool {
 
   async record(contract, key) {
     return (await this.storage([[contract, key]]))[0];
+  }
+
+  /**
+   * The timestamp, in seconds, of the newest block a checked read came from:
+   * the chain's own word for the time, as good as the balances and nonces read
+   * with it. Null before the first such read. Nothing is asked for it.
+   */
+  tipTime() {
+    const time = this.newest ? Number(this.newest.timestamp) : null;
+    return Number.isSafeInteger(time) ? time : null;
   }
 
   /** An unproved read from the best node, then the others. */

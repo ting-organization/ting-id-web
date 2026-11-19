@@ -44,8 +44,23 @@ export function decodeScheduled(bytes) {
 
 export const transferEffect = (to, amount) => new Writer().u8(1).put(to).u128(amount).finish();
 
-/** The end of the next UTC day, as Ting ID dates what it signs. */
-export const signedExpiry = () => BigInt((Math.floor(Date.now() / 86_400_000) + 2) * 86_400);
+/**
+ * How long, in seconds, a block can include a payment Ting ID signs: three
+ * hours. Short, so that one that never goes in, and what queues behind it,
+ * are cleared the same day (waiting.js).
+ */
+export const SIGNED_LIFE = 3 * 3600;
+
+/**
+ * When what is signed now expires, in block time: `life` seconds from now.
+ * Now is the later of this device's clock and `tipTime`, the timestamp of the
+ * newest block the wallet read from (seconds, or null): a block takes the
+ * action while its own timestamp is not past the expiry, so a clock that runs
+ * hours slow, as one set by hand in the wrong time zone does, would otherwise
+ * sign what has expired on arrival.
+ */
+export const signedExpiry = (tipTime = null, life = SIGNED_LIFE) =>
+  BigInt(Math.max(Math.floor(Date.now() / 1000), Number.isSafeInteger(tipTime) ? tipTime : 0) + life);
 
 /**
  * A coin action of an identity's slot, signed by its passkey: `10 ‖ 00 ‖
