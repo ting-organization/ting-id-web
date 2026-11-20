@@ -6,6 +6,7 @@ import { encodeCall, transactionId } from '../../kit/web/ting.js';
 import { BUDGETS } from './chain/budgets.js';
 import * as changes from './chain/changes.js';
 import * as coins from './chain/coins.js';
+import { namedIn } from './chain/guardians.js';
 import { networks, POLICY_CODE_HASH } from './chain/net.js';
 import { Pool } from './chain/pool.js';
 import * as registry from './chain/registry.js';
@@ -131,6 +132,8 @@ export const session = {
         await this.readCoins(saved);
         this.settleRuns();
         await this.scan(saved);
+        // Guardians the history names for the first time are read now, not a block later.
+        if (this.identity.onChain && this.guardianCandidates(saved).some((g) => !this.identity.linked.has(g))) await this.readIdentity(saved);
         await this.readRecoveries(saved);
         await this.watchPending();
       } catch (e) {
@@ -150,9 +153,18 @@ export const session = {
     }
   },
 
+  /**
+   * The guardians (hex) this browser can name for the identity: the ones
+   * linked from here, and every one its history names (guardians.js). Which
+   * of them are linked now, readIdentity reads from the chain.
+   */
+  guardianCandidates(saved) {
+    return [...new Set([...(saved.guardians ?? []), ...(this.scanned(saved)?.guardians ?? [])])];
+  },
+
   async readIdentity(saved) {
     const id = unhex(saved.id);
-    const guardians = (saved.guardians ?? []).map(unhex);
+    const guardians = this.guardianCandidates(saved).map(unhex);
     const found = await registry.readIdentity(this.pool, this.registry, id, guardians);
     if (!found) {
       this.identity = { id, onChain: false, keys: [], slots: [0n, BigInt(registry.DEFAULTS.savingsDelay)], pending: [], guardians: [] };
@@ -249,9 +261,24 @@ export const session = {
     return this.identity.slots.map((_, n) => hex(registry.slotAccount(this.registry, unhex(saved.id), n)));
   },
 
-  /** Where this identity's activity is kept in this browser. v3: each contract read to its own height, and the recovery proposals kept apart. */
+  /**
+   * Where this identity's activity is kept in this browser. v3: each contract
+   * read to its own height, and the recovery proposals kept apart. v4: and
+   * every guardian the history names.
+   */
   scanKey(saved) {
-    return `${this.net.key}:${saved.id}:v3`;
+    return `${this.net.key}:${saved.id}:v4`;
+  },
+
+  /** This identity's activity as this browser keeps it, if it has read any. */
+  scanned(saved) {
+    return store.get().scans?.[this.scanKey(saved)] ?? null;
+  },
+
+  /** Whether the activity has read the registry's events up to the block last read. */
+  historyRead(saved) {
+    const at = this.scanned(saved)?.at?.[this.net.registry];
+    return at != null && this.status != null && at >= this.status.height;
   },
 
   /**
@@ -261,12 +288,19 @@ export const session = {
    * to the height read so far, at most 20 pages of it a refresh, the rest on
    * the next. The newest 300 items are kept for the list; every recovery
    * proposal an approval named is kept apart, with the keys it installs, so
-   * that no number of other events can push one out (readRecoveries).
+   * that no number of other events can push one out (readRecoveries); and so
+   * is every guardian the history names (guardianCandidates).
    */
   async scan(saved) {
     const key = this.scanKey(saved);
     const scans = store.get().scans ?? {};
-    const scan = scans[key] ?? { start: Math.max(0, (saved.createdHeight ?? 1) - 1), at: {}, items: [], proposals: {} };
+    // A scan kept under an earlier format is read again from the start, but its recovery proposals are kept
+    // meanwhile, so that a recovery under way does not drop off Identity while the history is read again.
+    const prefix = `${this.net.key}:${saved.id}`;
+    const earlier = Object.entries(scans).filter(([k]) => k !== key && k.startsWith(`${prefix}:`)).map(([, s]) => s.proposals ?? {});
+    const scan = scans[key] ?? {
+      start: Math.max(0, (saved.createdHeight ?? 1) - 1), at: {}, items: [], proposals: Object.assign({}, ...earlier), guardians: [],
+    };
     const mine = new Set(this.accounts());
     const contracts = [...this.coins.map((c) => c.id), this.net.registry];
     const height = this.status.height;
@@ -295,6 +329,7 @@ export const session = {
             if (!item) continue;
             scan.items.push({ ...item, contract, height: block.height, time: block.timestamp, tx: e.transaction });
             if (item.kind === 'id:recovery-approved') scan.proposals[item.proposal] = item.keys;
+            for (const g of namedIn(item)) if (!scan.guardians.includes(g)) scan.guardians.push(g);
           }
         }
         if (beyond || page.next > height) break;
@@ -314,7 +349,6 @@ export const session = {
       scan.items.sort((a, b) => b.height - a.height);
       scan.items = scan.items.slice(0, 300);
       // This identity's activity kept under an earlier format is read no more: dropped, so it does not pile up.
-      const prefix = `${this.net.key}:${saved.id}`;
       const kept = Object.fromEntries(Object.entries(scans).filter(([k]) => k !== prefix && !k.startsWith(`${prefix}:`)));
       store.set({ scans: { ...kept, [key]: scan } });
     }

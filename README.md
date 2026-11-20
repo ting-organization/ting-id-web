@@ -61,7 +61,7 @@ less than one signed through policy-p256 (20.5 M C).
 |---|---|
 | Wallet | Balances, Send / Receive / Scan, scheduled withdrawals with Cancel, what is waiting for a block, and activity. A new identity without coins shows its create link, *Get your first coins* |
 | Send | Review, then one passkey prompt. From Savings it is scheduled for when the lock ends, and the node holds the run until then |
-| Identity | Devices (passkeys, phrase and phone keys), adding one from its device link, guardians (linked from their code or ID) and your own guardian code, your recovery phrase, recoveries your guardians approve, pending changes with Cancel and Apply |
+| Identity | Devices (passkeys, phrase and phone keys), adding one from its device link, guardians (linked from their code or ID, and those linked on another device, found in the identity's history) and your own guardian code, your recovery phrase, recoveries your guardians approve, pending changes with Cancel and Apply |
 | People | Contacts |
 | Settings | Network, nodes, coins, appearance, forgetting the identity in this browser |
 
@@ -97,7 +97,8 @@ asks; any other payment or call goes without a question.
 a Merkle proof against the state root of a header the wallet checks itself: its hash
 is the tip, its proof of work holds, its chain is ours. With two or more nodes it
 waits until another node has the same block. Events and transaction lookups, which
-carry no proofs, are used only for history and progress.
+carry no proofs, are used only for history and progress, and to name the guardians
+whose records the wallet then reads with proofs.
 
 Not here yet: signing in to sites (TOCS-1), coin tools, and paying fees for
 identity changes through a batch (they go unpaid, as they do from Ting ID when no
@@ -169,6 +170,7 @@ node kit/scripts/devchain.mjs fund <account> 10
 node scripts/test-phrase.mjs                 # recovery phrases against BIP-39, BIP-32, RFC 6979 and OpenSSL
 node scripts/test-call-links.mjs             # call and pay links read as written and as Ting ID reads them, and durations in words
 node scripts/test-waiting.mjs                # three-hour expiry, when a queue looks stuck and clears, and the same payment asked about
+node scripts/test-guardians.mjs              # guardians found in the identity's history, shown only once the registry lists them
 ```
 
 `reference/` holds the two reference programs the kit does not deploy,

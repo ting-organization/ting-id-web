@@ -8,6 +8,7 @@ import { qrSvg } from '../../../kit/web/qr.js';
 import { idOf } from '../../../kit/web/ting.js';
 import { BUDGETS } from '../chain/budgets.js';
 import * as changes from '../chain/changes.js';
+import { listed as guardiansListed } from '../chain/guardians.js';
 import * as registry from '../chain/registry.js';
 import { guardianCode, guardianLink, heldLink, hold, readLink } from '../links.js';
 import * as p256 from '../p256.js';
@@ -41,16 +42,15 @@ export const identity = {
         <b>${here ? 'This device' : `${kind} #${k.keyId}`}</b><span>${esc(kind)} · ${fingerprint(k.params)}${removing ? ` · removed once change #${removing.changeNo} applies` : ''}</span></span>
         ${!here && mine != null && !removing ? `<button class="btn small danger" data-remove="${k.keyId}">Remove</button>` : ''}</div>`;
     }).join('');
-    const guardians = (saved.guardians ?? []).map((g) => {
-      const linked = id.guardians.some((x) => hex(x) === g);
-      const linking = !linked && waiting((op) => op.kind === 'addGuardian' && hex(op.guardian) === g);
-      const unlinking = linked && waiting((op) => op.kind === 'removeGuardian' && hex(op.guardian) === g);
+    // Linked from here, linked elsewhere and found in the history, or linked by a waiting change (guardians.js).
+    const { rows, unknown } = guardiansListed(id, saved.guardians);
+    const guardians = rows.map(({ guardian: g, linked, linking, unlinking }) => {
       const text = unlinking ? `Unlinked once change #${unlinking.changeNo} applies` : linked ? 'Linked'
         : linking ? `Linked once change #${linking.changeNo} applies` : 'Not linked';
       return `<div class="row"><span class="avatar">${icon('shield')}</span><span class="main"><b>${esc(guardianName(g))}</b>
         <span>${esc(text)}</span></span>
         ${linked && mine != null && !unlinking ? `<button class="btn small danger" data-unlink="${g}">Unlink</button>` : ''}</div>`;
-    }).join('');
+    }).join('') + (unknown ? unknownGuardians(unknown, rows.length > 0, session.historyRead(saved)) : '');
     const core = id.core;
     return `<section>
       <div class="hero">
@@ -70,7 +70,7 @@ export const identity = {
         <div class="card list">${devices || '<div class="row"><span class="main"><span>None yet</span></span></div>'}</div>
         ${changesList()}
         <h2 class="section">Guardians</h2>
-        <div class="card list">${guardians || '<div class="row"><span class="main"><b>No guardians linked from here</b><span class="wrap">Guardians are people you trust. Enough of them together can give your identity new keys if you lose every device.</span></span></div>'}</div>
+        <div class="card list">${guardians || '<div class="row"><span class="main"><b>No guardians yet</b><span class="wrap">Guardians are people you trust. Enough of them together can give your identity new keys if you lose every device.</span></span></div>'}</div>
         ${mine != null ? `<a class="link" href="#/add-guardian" data-link-guardian>${icon('shield')} Link a guardian</a>` : ''}
         ${mine != null ? phraseSection(id) : ''}
         <h2 class="section">Accounts</h2>
@@ -127,6 +127,20 @@ export const identity = {
     bindRecoveringCard(view);
   },
 };
+
+/**
+ * The linked guardians this browser cannot name, as the core record counts
+ * them: while the history is read, it may still find them; once it is read,
+ * they were most likely chosen at creation, which no event names.
+ */
+function unknownGuardians(count, more, historyRead) {
+  const title = `${count} ${more ? 'more ' : ''}guardian${count === 1 ? '' : 's'}`;
+  const text = historyRead
+    ?'Linked, but named in no change this browser has read: most likely chosen when the identity was created on another device.'
+    : 'Linked elsewhere. This browser is still reading the identity’s history to find who.';
+  return `<div class="row"><span class="avatar">${icon('shield')}</span><span class="main"><b>${esc(title)}</b>
+    <span class="wrap">${esc(text)}</span></span></div>`;
+}
 
 /**
  * For a browser that can't act yet: its guardians' recover code while they
